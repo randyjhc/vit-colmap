@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vit-colmap"
+version = "0.1.0"
+description = "An ViT-based feature extractor for Structure-from-Montion."
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "numpy>=2.2.6",
+    "opencv-python>=4.11.0.86",
+    "pycolmap>=3.12.6",
+]
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.3.0",
+    "pytest>=8.4.2",
+    "pytest-cov>=7.0.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["vit_colmap*"]
+exclude = ["tests*", "third_party*", "data*"]
