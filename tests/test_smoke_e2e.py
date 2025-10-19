@@ -3,7 +3,6 @@ import numpy as np
 import cv2
 import pycolmap
 
-from vit_colmap.features.dummy_extractor import DummyExtractor
 from vit_colmap.pipeline.run_pipeline import Pipeline
 from vit_colmap.utils.config import Config
 
@@ -35,11 +34,11 @@ def test_pipeline_integration(tmp_path: Path):
     # 2) Configure and run the pipeline
     output_dir = tmp_path / "output"
     db_path = tmp_path / "database.db"
-    extractor = DummyExtractor(step=40)
 
-    # Create config with test settings
+    # Create config with test settings - use DummyExtractor via config
     config = Config()
     config.camera.model = "PINHOLE"
+    config.extractor.extractor_type = "dummy"  # Use dummy extractor for testing
     config.do_matching = True
     config.do_reconstruction = False  # Skip reconstruction for dummy features
 
@@ -48,7 +47,6 @@ def test_pipeline_integration(tmp_path: Path):
         image_dir=img_dir,
         output_dir=output_dir,
         db_path=db_path,
-        extractor=extractor,
     )
 
     # 3) Verify outputs

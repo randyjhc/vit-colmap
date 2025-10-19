@@ -55,11 +55,11 @@ class CameraConfig:
 class MatchingConfig:
     """Feature matching configuration."""
 
-    use_gpu: bool = False
+    use_gpu: bool = True
     max_ratio: float = 0.8
     max_distance: float = 0.7
     cross_check: bool = True
-    num_threads: int = 1  # -1 means auto-detect
+    num_threads: int = -1  # -1 means auto-detect
 
     def to_sift_options(self):
         """Convert to pycolmap SiftMatchingOptions."""
@@ -78,7 +78,7 @@ class ReconstructionConfig:
     """3D reconstruction configuration."""
 
     min_num_matches: int = 15
-    multiple_models: bool = False
+    multiple_models: bool = True
 
     def to_mapper_options(self):
         """Convert to pycolmap IncrementalPipelineOptions."""
@@ -90,6 +90,14 @@ class ReconstructionConfig:
 
 
 @dataclass
+class ExtractorConfig:
+    """Feature extractor configuration."""
+
+    extractor_type: str = "vit"  # "vit" or "colmap_sift"
+    vit_weights_path: Optional[str] = None
+
+
+@dataclass
 class Config:
     """Main configuration class for vit-colmap pipeline."""
 
@@ -98,6 +106,9 @@ class Config:
 
     # Camera
     camera: CameraConfig = field(default_factory=CameraConfig)
+
+    # Extractor
+    extractor: ExtractorConfig = field(default_factory=ExtractorConfig)
 
     # Matching
     matching: MatchingConfig = field(default_factory=MatchingConfig)
@@ -123,6 +134,12 @@ class Config:
         if hasattr(args, "camera_model"):
             config.camera.model = args.camera_model
 
+        # Update extractor config
+        if hasattr(args, "use_colmap_sift") and args.use_colmap_sift:
+            config.extractor.extractor_type = "colmap_sift"
+        if hasattr(args, "model") and args.model:
+            config.extractor.vit_weights_path = str(args.model)
+
         # Update matching config
         if hasattr(args, "use_gpu"):
             config.matching.use_gpu = args.use_gpu
@@ -144,6 +161,7 @@ class Config:
         """Get configuration summary."""
         lines = [
             "Configuration:",
+            f"  Extractor: {self.extractor.extractor_type}",
             f"  Camera model: {self.camera.model}",
             f"  Matching: {'enabled' if self.do_matching else 'disabled'}",
             f"  Reconstruction: {'enabled' if self.do_reconstruction else 'disabled'}",
