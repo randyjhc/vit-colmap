@@ -205,3 +205,13 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Custom - Data directory
+# Track folder structure and READMEs, but ignore actual data files
+
+# Dataset files
+data/**/DTU/
+
+# Allow .gitkeep and README files
+!**/.gitkeep
+!**/README.md
