@@ -25,3 +25,7 @@ dev = [
 where = ["."]
 include = ["vit_colmap*"]
 exclude = ["tests*", "third_party*", "data*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = ["third_party", "data", ".git", ".venv", "build", "dist"]
