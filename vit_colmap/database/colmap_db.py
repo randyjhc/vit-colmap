@@ -4,7 +4,15 @@ import numpy as np
 
 class ColmapDatabase:
     def __init__(self, db_path: str) -> None:
-        self.db = pycolmap.Database(db_path)
+        # pycolmap 3.13+: Database.open(path) is a static method
+        # pycolmap 3.12: Database().open(path) is an instance method
+        try:
+            # Try 3.13+ API first (static method)
+            self.db = pycolmap.Database.open(db_path)
+        except TypeError:
+            # Fall back to 3.12 API (instance method)
+            self.db = pycolmap.Database()
+            self.db.open(db_path)
 
     # --- camera & image bookkeeping ---
     def add_pinhole_camera(

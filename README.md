@@ -8,6 +8,9 @@ A Vision Transformer (ViT) based feature extraction pipeline integrated with COL
 
 - Python 3.13+
 - [uv](https://github.com/astral-sh/uv) - Fast Python package installer
+- **CUDA Toolkit** (optional, for GPU-accelerated COLMAP)
+  - If you want GPU support for COLMAP (faster SIFT extraction, matching, and MVS), you need to build pycolmap from source
+  - See [Building pycolmap with CUDA](#building-pycolmap-with-cuda) below
 
 ### Environment Setup with uv
 
@@ -37,6 +40,46 @@ A Vision Transformer (ViT) based feature extraction pipeline integrated with COL
    ```bash
    uv sync --group dev
    ```
+
+### Building pycolmap with CUDA
+
+The pre-built `pycolmap` wheels from PyPI **do not include CUDA support**. To enable GPU-accelerated features in COLMAP (SIFT extraction, matching, and dense reconstruction), you need to build pycolmap from source.
+
+#### Prerequisites
+- CUDA Toolkit installed (CUDA 11.0+)
+- CMake 3.15+
+- Ninja build system
+- Build tools (gcc, make, etc.)
+
+#### Build Steps
+
+1. **Build and install COLMAP** (already provided as a git submodule):
+   ```bash
+   cd third_party/colmap
+   mkdir -p build && cd build
+   cmake .. -GNinja -DCMAKE_BUILD_TYPE=Release -DCUDA_ENABLED=ON
+   ninja
+   cmake --install . --prefix ../install
+   cd ../..  # Return to project root
+   ```
+
+2. **Build and install pycolmap** with CUDA support:
+   ```bash
+   cd third_party/colmap
+   CMAKE_PREFIX_PATH=$(pwd)/install uv pip install .
+   cd ../..  # Return to project root
+   ```
+
+3. **Verify CUDA support**:
+   ```bash
+   python -c "import pycolmap; print(f'CUDA enabled: {pycolmap.has_cuda}')"
+   # Should print: CUDA enabled: True
+
+   # Check number of GPUs available
+   python -c "import pycolmap; print(f'CUDA devices: {pycolmap.get_num_cuda_devices()}')"
+   ```
+
+> **Note**: Building from source will install `pycolmap` version `3.13.0.dev0` instead of the stable `3.12.6` from PyPI. This is the development version from the COLMAP git submodule.
 
 ## Development Workflow
 
@@ -92,7 +135,7 @@ Run the pipeline from the command line:
 
 ```bash
 # Using COLMAP's built-in SIFT (recommended)
-python -m vit_colmap.pipeline.run_pipeline \
+python -m vit_colmap.pipeline \
     --images data/raw/my-dataset/images \
     --output data/outputs/my-dataset \
     --db data/intermediate/my-dataset/database.db \
@@ -101,7 +144,7 @@ python -m vit_colmap.pipeline.run_pipeline \
     --verbose
 
 # Using ViT extractor (when implemented)
-python -m vit_colmap.pipeline.run_pipeline \
+python -m vit_colmap.pipeline \
     --images data/raw/my-dataset/images \
     --output data/outputs/my-dataset \
     --db data/intermediate/my-dataset/database.db \

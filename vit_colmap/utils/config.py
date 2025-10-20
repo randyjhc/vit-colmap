@@ -61,15 +61,38 @@ class MatchingConfig:
     cross_check: bool = True
     num_threads: int = -1  # -1 means auto-detect
 
-    def to_sift_options(self):
-        """Convert to pycolmap SiftMatchingOptions."""
+    def to_matching_options(self):
+        """Convert to pycolmap FeatureMatchingOptions.
 
+        Compatible with both pycolmap 3.12 (PyPI) and 3.13+ (built from source).
+        Returns FeatureMatchingOptions for 3.13+ or SiftMatchingOptions for 3.12.
+        """
+        # pycolmap 3.13+ uses FeatureMatchingOptions with .sift sub-options
+        if hasattr(pycolmap, "FeatureMatchingOptions"):
+            opts = pycolmap.FeatureMatchingOptions()
+            if hasattr(opts, "use_gpu"):
+                opts.use_gpu = self.use_gpu
+            if hasattr(opts, "num_threads"):
+                opts.num_threads = self.num_threads
+            # Configure SIFT matching sub-options
+            opts.sift.max_ratio = self.max_ratio
+            opts.sift.max_distance = self.max_distance
+            opts.sift.cross_check = self.cross_check
+            return opts
+        else:
+            # pycolmap 3.12 uses SiftMatchingOptions directly
+            return self._to_sift_options_legacy()
+
+    def _to_sift_options_legacy(self):
+        """Legacy method for pycolmap 3.12 compatibility."""
         opts = pycolmap.SiftMatchingOptions()
-        opts.use_gpu = self.use_gpu
+        if hasattr(opts, "use_gpu"):
+            opts.use_gpu = self.use_gpu
         opts.max_ratio = self.max_ratio
         opts.max_distance = self.max_distance
         opts.cross_check = self.cross_check
-        opts.num_threads = self.num_threads
+        if hasattr(opts, "num_threads"):
+            opts.num_threads = self.num_threads
         return opts
 
 

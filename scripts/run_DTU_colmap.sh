@@ -81,8 +81,6 @@ python -m vit_colmap.pipeline.run_pipeline \
     --db "$DB_PATH" \
     --camera-model PINHOLE \
     --use-colmap-sift \
-    --skip-matching \
-    --skip-reconstruction \
     --verbose
 
 echo "Pipeline complete!"

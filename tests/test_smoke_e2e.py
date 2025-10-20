@@ -1,9 +1,8 @@
 from pathlib import Path
 import numpy as np
 import cv2
-import pycolmap
 
-from vit_colmap.pipeline.run_pipeline import Pipeline
+from vit_colmap.pipeline.run_pipeline import Pipeline, open_database, get_db_count
 from vit_colmap.utils.config import Config
 
 
@@ -55,16 +54,22 @@ def test_pipeline_integration(tmp_path: Path):
     assert result is None, "Should return None when do_reconstruction=False"
 
     # 4) Check database contents
-    db = pycolmap.Database(str(db_path))
-    assert db.num_cameras >= 1, "Should have at least one camera"
-    assert db.num_images == 3, f"Expected 3 images, got {db.num_images}"
-    assert db.num_matched_image_pairs >= 1, "Should have matched image pairs"
+    with open_database(str(db_path)) as db:
+        num_cameras = get_db_count(db, "num_cameras")
+        num_images = get_db_count(db, "num_images")
+        num_pairs = get_db_count(db, "num_matched_image_pairs")
 
-    # Verify all images have features
-    for img_id in range(1, 4):
-        assert db.exists_keypoints(img_id), f"Image {img_id} should have keypoints"
-        assert db.exists_descriptors(img_id), f"Image {img_id} should have descriptors"
+        assert num_cameras >= 1, "Should have at least one camera"
+        assert num_images == 3, f"Expected 3 images, got {num_images}"
+        assert num_pairs >= 1, "Should have matched image pairs"
+
+        # Verify all images have features
+        for img_id in range(1, 4):
+            assert db.exists_keypoints(img_id), f"Image {img_id} should have keypoints"
+            assert db.exists_descriptors(
+                img_id
+            ), f"Image {img_id} should have descriptors"
 
     print(
-        f"✓ Pipeline test passed: {db.num_images} images processed, {db.num_matched_image_pairs} pairs matched"
+        f"✓ Pipeline test passed: {num_images} images processed, {num_pairs} pairs matched"
     )
