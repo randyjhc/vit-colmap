@@ -112,6 +112,16 @@ class ViTExtractor(BaseExtractor):
         image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
         h_orig, w_orig = image_rgb.shape[:2]
 
+        # Resize image to be multiple of patch_size (required by ViT)
+        h_new = (h_orig // self.patch_size) * self.patch_size
+        w_new = (w_orig // self.patch_size) * self.patch_size
+
+        # If dimensions changed, resize
+        if h_new != h_orig or w_new != w_orig:
+            image_rgb = cv2.resize(
+                image_rgb, (w_new, h_new), interpolation=cv2.INTER_LINEAR
+            )
+
         # Preprocess image
         image_tensor = self.transform(image_rgb).unsqueeze(0).to(self.device)
 
@@ -120,9 +130,14 @@ class ViTExtractor(BaseExtractor):
             # Forward pass through ViT
             features = self.model.forward_features(image_tensor)
 
-            # Extract patch tokens (skip CLS token at position 0)
-            # features shape: (1, num_patches + 1, feature_dim)
-            patch_features = features[:, 1:, :]  # Remove CLS token
+            # Handle different DINOv2 output formats
+            if isinstance(features, dict):
+                # Newer DINOv2 returns a dictionary
+                patch_features = features["x_norm_patchtokens"]
+            else:
+                # Older DINOv2 returns a tensor
+                # Extract patch tokens (skip CLS token at position 0)
+                patch_features = features[:, 1:, :]
 
         # Reshape to spatial grid
         # Calculate grid size based on input image and patch size
@@ -138,6 +153,7 @@ class ViTExtractor(BaseExtractor):
         keypoints, descriptors = self._dense_to_sparse(
             feature_map,
             original_size=(w_orig, h_orig),
+            resized_size=(w_new, h_new),
             feature_grid_size=(h_patches, w_patches),
         )
 
@@ -147,6 +163,7 @@ class ViTExtractor(BaseExtractor):
         self,
         feature_map: torch.Tensor,
         original_size: tuple[int, int],
+        resized_size: tuple[int, int],
         feature_grid_size: tuple[int, int],
     ):
         """
@@ -160,15 +177,17 @@ class ViTExtractor(BaseExtractor):
         Args:
             feature_map: (1, C, H, W) dense feature tensor
             original_size: (width, height) of original image
+            resized_size: (width, height) after patch-size alignment
             feature_grid_size: (h, w) number of patches
 
         Returns:
-            keypoints: (N, 2) float32 array of (x, y) coordinates
+            keypoints: (N, 2) float32 array of (x, y) coordinates in original image space
             descriptors: (N, descriptor_dim) uint8 array
         """
         feature_map = feature_map.squeeze(0)  # (C, H, W)
         C, H, W = feature_map.shape
         w_orig, h_orig = original_size
+        w_resized, h_resized = resized_size
 
         # Compute saliency: L2 norm of features at each spatial location
         saliency = torch.norm(feature_map, dim=0)  # (H, W)
@@ -183,12 +202,15 @@ class ViTExtractor(BaseExtractor):
         grid_x = (top_k_indices % W).float()
 
         # Map grid coordinates to original image coordinates
-        # Add 0.5 to get center of patch
-        scale_x = w_orig / W
-        scale_y = h_orig / H
+        # First scale to resized image, then to original
+        scale_x_resized = w_resized / W
+        scale_y_resized = h_resized / H
 
-        keypoints_x = (grid_x + 0.5) * scale_x
-        keypoints_y = (grid_y + 0.5) * scale_y
+        scale_x_orig = w_orig / w_resized
+        scale_y_orig = h_orig / h_resized
+
+        keypoints_x = (grid_x + 0.5) * scale_x_resized * scale_x_orig
+        keypoints_y = (grid_y + 0.5) * scale_y_resized * scale_y_orig
         keypoints = torch.stack([keypoints_x, keypoints_y], dim=1)  # (N, 2)
 
         # Extract descriptors at keypoint locations

@@ -4,11 +4,14 @@ Tests the complete pipeline: image loading → feature extraction → database w
 """
 
 import sys
+import os
 from pathlib import Path
 import numpy as np
 
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+
 # Add project root to path
-project_root = Path(__file__).parent
+project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 
@@ -31,9 +34,9 @@ def test_vit_extractor_basic():
         )
         print("   ✓ Extractor initialized successfully")
 
-        # Create a test image
+        # Create a test image with valid dimensions (476=34*14, 644=46*14)
         print("\n2. Creating test image...")
-        test_img = np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8)
+        test_img = np.random.randint(0, 255, (476, 644, 3), dtype=np.uint8)
         print(f"   ✓ Test image shape: {test_img.shape}")
 
         # Run inference
@@ -90,10 +93,10 @@ def test_vit_extractor_full_pipeline():
         print(f"   - Image directory: {image_dir}")
         print(f"   - Database path: {db_path}")
 
-        # Generate test images
+        # Generate test images with valid dimensions
         print("\n2. Generating 3 test images...")
         for i in range(3):
-            img = np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8)
+            img = np.random.randint(0, 255, (476, 644, 3), dtype=np.uint8)
             img_path = image_dir / f"test_{i:03d}.jpg"
             cv2.imwrite(str(img_path), img)
             print(f"   ✓ Created {img_path.name}")
@@ -178,8 +181,8 @@ def test_compare_with_dummy():
         image_dir = temp_dir / "images"
         image_dir.mkdir()
 
-        # Create single test image
-        img = np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8)
+        # Create single test image with valid dimensions
+        img = np.random.randint(0, 255, (476, 644, 3), dtype=np.uint8)
         img_path = image_dir / "test.jpg"
         cv2.imwrite(str(img_path), img)
 
@@ -224,8 +227,8 @@ def test_compare_with_dummy():
         print(f"     - Descriptors: ({vit_desc[0]}, {vit_desc[1]})")
 
         # Validate format compatibility
-        assert vit_kp[1] == dummy_kp[1], "Keypoint columns must match"
-        assert vit_desc[1] == dummy_desc[1], "Descriptor dimensions must match"
+        assert vit_kp[1] == dummy_kp[1] == 2, "Keypoint columns must be 2"
+        assert vit_desc[1] == dummy_desc[1] == 128, "Descriptor dimensions must be 128"
 
         print("\n✓ Formats are compatible!")
 
