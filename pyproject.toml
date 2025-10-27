@@ -9,6 +9,7 @@ description = "An ViT-based feature extractor for Structure-from-Montion."
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "matplotlib>=3.10.7",
     "numpy>=2.2.6",
     "opencv-python>=4.11.0.86",
     "pandas>=2.3.3",

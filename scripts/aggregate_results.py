@@ -13,6 +13,7 @@ import pandas as pd
 
 from vit_colmap.utils.metrics import MetricsResult
 from vit_colmap.utils.export import MetricsExporter
+from vit_colmap.utils.plot_metrics import MetricsPlotter
 
 logging.basicConfig(
     level=logging.INFO,
@@ -261,6 +262,29 @@ def main():
         if args.format in ["markdown", "both"]:
             report_path = output_dir / dataset / "comparison_report.md"
             generate_comparison_report(dataset_df, report_path, dataset)
+
+        # Generate summary plot across scans
+        dataset_results_dir = results_dir / dataset
+        if dataset_results_dir.exists():
+            plot_path = output_dir / dataset / "scans_summary.png"
+            plotter = MetricsPlotter(dataset_results_dir, enable_cache=True)
+            generated_plot = plotter.plot_multiple_scans(
+                scans=sorted(dataset_df["scene"].unique()),
+                output_path=plot_path,
+            )
+            if generated_plot:
+                logger.info(f"  Saved scans summary plot: {generated_plot}")
+            else:
+                logger.warning(
+                    "  Could not generate scans summary plot for dataset %s (missing data)",
+                    dataset,
+                )
+        else:
+            logger.warning(
+                "  Results directory for dataset %s not found at %s",
+                dataset,
+                dataset_results_dir,
+            )
 
     logger.info("\nAggregation complete!")
 

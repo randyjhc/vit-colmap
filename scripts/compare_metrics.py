@@ -9,6 +9,7 @@ This script demonstrates how to:
 
 from pathlib import Path
 from vit_colmap.utils.export import MetricsExporter
+from vit_colmap.utils.plot_metrics import MetricsPlotter
 
 
 def main():
@@ -136,6 +137,15 @@ def main():
         print(f"{metric:<30} Winner: {winner} {symbol}")
 
     print("\n")
+
+    # Generate comparison plot
+    plot_output = results_dir / scan_name / "comparison_plot.png"
+    plotter = MetricsPlotter(results_dir, enable_cache=False)
+    generated = plotter.plot_single_scan(scan_name, output_path=plot_output)
+    if generated:
+        print(f"Saved comparison plot to: {generated}")
+    else:
+        print("Comparison plot was not generated (missing data).")
 
 
 if __name__ == "__main__":
