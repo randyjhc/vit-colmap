@@ -2,7 +2,6 @@ import argparse
 import logging
 from pathlib import Path
 from typing import Optional
-from contextlib import contextmanager
 import pycolmap
 
 from vit_colmap.features.base_extractor import BaseExtractor
@@ -10,39 +9,9 @@ from vit_colmap.features.vit_extractor import ViTExtractor
 from vit_colmap.features.colmap_sift_extractor import ColmapSiftExtractor
 from vit_colmap.features.dummy_extractor import DummyExtractor
 from vit_colmap.utils.config import Config
+from vit_colmap.database.colmap_db import ColmapDatabase
 
 logger = logging.getLogger(__name__)
-
-
-@contextmanager
-def open_database(db_path: str):
-    """Open a COLMAP database with version compatibility.
-
-    pycolmap 3.13+: Database.open(path) is a static method that returns instance
-    pycolmap 3.12: Database().open(path) is an instance method
-    """
-    try:
-        # Try 3.13+ API (static method with context manager)
-        with pycolmap.Database.open(db_path) as db:
-            yield db
-    except (TypeError, AttributeError):
-        # Fall back to 3.12 API (instance method, no context manager)
-        db = pycolmap.Database()
-        db.open(db_path)
-        try:
-            yield db
-        finally:
-            db.close()
-
-
-def get_db_count(db, attr_name: str) -> int:
-    """Get database count with version compatibility.
-
-    pycolmap 3.13+: num_* are methods
-    pycolmap 3.12: num_* are properties
-    """
-    attr = getattr(db, attr_name)
-    return attr() if callable(attr) else attr
 
 
 class Pipeline:
@@ -54,6 +23,112 @@ class Pipeline:
             config: Configuration object. If None, uses default configuration.
         """
         self.config = config if config is not None else Config()
+
+    def _print_summary(
+        self,
+        db_path: Path,
+        output_dir: Path,
+        do_matching: bool,
+        do_reconstruction: bool,
+        reconstructions: Optional[dict[int, pycolmap.Reconstruction]],
+    ) -> None:
+        """Print a comprehensive summary of pipeline results.
+
+        Args:
+            db_path: Path to COLMAP database
+            output_dir: Output directory path
+            do_matching: Whether matching was performed
+            do_reconstruction: Whether reconstruction was performed
+            reconstructions: Dictionary of reconstructions (if created)
+        """
+        logger.info("")
+        logger.info("=" * 60)
+        logger.info("Pipeline Summary")
+        logger.info("=" * 60)
+
+        # Gather statistics from database
+        with ColmapDatabase.open_database(str(db_path)) as db:
+            num_images = ColmapDatabase.get_db_count(db, "num_images")
+            num_cameras = ColmapDatabase.get_db_count(db, "num_cameras")
+
+            # Feature extraction summary
+            logger.info("")
+            logger.info("Feature Extraction:")
+            logger.info(f"  - Images processed: {num_images}")
+            logger.info(f"  - Cameras: {num_cameras}")
+
+            # Feature matching summary
+            if do_matching:
+                num_matched_pairs = ColmapDatabase.get_db_count(
+                    db, "num_matched_image_pairs"
+                )
+                # Try to get verified pairs (may not be available in all versions)
+                try:
+                    num_verified_pairs = ColmapDatabase.get_db_count(
+                        db, "num_verified_image_pairs"
+                    )
+                except AttributeError:
+                    num_verified_pairs = None
+
+                total_possible_pairs = num_images * (num_images - 1) // 2
+                match_rate = (
+                    (num_matched_pairs / total_possible_pairs * 100)
+                    if total_possible_pairs > 0
+                    else 0
+                )
+
+                logger.info("")
+                logger.info("Feature Matching:")
+                logger.info(
+                    f"  - Matched image pairs: {num_matched_pairs} / {total_possible_pairs} ({match_rate:.1f}%)"
+                )
+                if num_verified_pairs is not None:
+                    logger.info(f"  - Verified image pairs: {num_verified_pairs}")
+            else:
+                logger.info("")
+                logger.info("Feature Matching: SKIPPED")
+
+        # 3D Reconstruction summary
+        logger.info("")
+        if do_reconstruction:
+            if reconstructions and len(reconstructions) > 0:
+                logger.info("3D Reconstruction:")
+                logger.info(f"  - Reconstructions created: {len(reconstructions)}")
+
+                total_reg_images = 0
+                total_points = 0
+                for idx, recon in reconstructions.items():
+                    num_reg_images = len(recon.images)
+                    num_points = len(recon.points3D)
+                    total_reg_images += num_reg_images
+                    total_points += num_points
+
+                    logger.info(f"  - Reconstruction {idx}:")
+                    logger.info(f"      Registered images: {num_reg_images}")
+                    logger.info(f"      3D points: {num_points}")
+
+                registration_rate = (
+                    (total_reg_images / num_images * 100) if num_images > 0 else 0
+                )
+                logger.info(
+                    f"  - Total registered: {total_reg_images} / {num_images} images ({registration_rate:.1f}%)"
+                )
+                logger.info(f"  - Total 3D points: {total_points}")
+            else:
+                logger.info("3D Reconstruction: FAILED (no reconstructions created)")
+        else:
+            logger.info("3D Reconstruction: SKIPPED")
+
+        # Output paths
+        logger.info("")
+        logger.info("Output:")
+        logger.info(f"  - Database: {db_path}")
+        if do_reconstruction:
+            sparse_dir = output_dir / "sparse"
+            logger.info(f"  - Sparse reconstruction: {sparse_dir}")
+
+        logger.info("=" * 60)
+        logger.info("")
 
     def run(
         self,
@@ -113,8 +188,8 @@ class Pipeline:
         extractor.extract(image_dir, db_path, camera_model, camera_params)
 
         # Check how many images were processed
-        with open_database(str(db_path)) as db_check:
-            num_imgs = get_db_count(db_check, "num_images")
+        with ColmapDatabase.open_database(str(db_path)) as db_check:
+            num_imgs = ColmapDatabase.get_db_count(db_check, "num_images")
             logger.info(f"Extracted features for {num_imgs} images")
 
         # Feature matching
@@ -133,11 +208,14 @@ class Pipeline:
                 )
 
             # Check matches
-            with open_database(str(db_path)) as db_check:
-                num_pairs = get_db_count(db_check, "num_matched_image_pairs")
+            with ColmapDatabase.open_database(str(db_path)) as db_check:
+                num_pairs = ColmapDatabase.get_db_count(
+                    db_check, "num_matched_image_pairs"
+                )
                 logger.info(f"Matched {num_pairs} image pairs")
 
         # 3D Reconstruction
+        reconstructions = None
         if do_reconstruction:
             logger.info("Running 3D reconstruction...")
             sparse_dir = output_dir / "sparse"
@@ -161,9 +239,16 @@ class Pipeline:
             else:
                 logger.warning("No reconstructions created")
 
-            return reconstructions
+        # Print comprehensive summary
+        self._print_summary(
+            db_path=db_path,
+            output_dir=output_dir,
+            do_matching=do_matching,
+            do_reconstruction=do_reconstruction,
+            reconstructions=reconstructions,
+        )
 
-        return None
+        return reconstructions
 
 
 def main() -> None:

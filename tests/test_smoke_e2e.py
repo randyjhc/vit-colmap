@@ -2,7 +2,8 @@ from pathlib import Path
 import numpy as np
 import cv2
 
-from vit_colmap.pipeline.run_pipeline import Pipeline, open_database, get_db_count
+from vit_colmap.pipeline.run_pipeline import Pipeline
+from vit_colmap.database.colmap_db import ColmapDatabase
 from vit_colmap.utils.config import Config
 
 
@@ -54,10 +55,10 @@ def test_pipeline_integration(tmp_path: Path):
     assert result is None, "Should return None when do_reconstruction=False"
 
     # 4) Check database contents
-    with open_database(str(db_path)) as db:
-        num_cameras = get_db_count(db, "num_cameras")
-        num_images = get_db_count(db, "num_images")
-        num_pairs = get_db_count(db, "num_matched_image_pairs")
+    with ColmapDatabase.open_database(str(db_path)) as db:
+        num_cameras = ColmapDatabase.get_db_count(db, "num_cameras")
+        num_images = ColmapDatabase.get_db_count(db, "num_images")
+        num_pairs = ColmapDatabase.get_db_count(db, "num_matched_image_pairs")
 
         assert num_cameras >= 1, "Should have at least one camera"
         assert num_images == 3, f"Expected 3 images, got {num_images}"

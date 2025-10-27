@@ -1,5 +1,6 @@
 import pycolmap
 import numpy as np
+from contextlib import contextmanager
 
 
 class ColmapDatabase:
@@ -41,3 +42,34 @@ class ColmapDatabase:
     def commit(self) -> None:
         # pycolmap Database doesn't need explicit commit
         pass
+
+    @staticmethod
+    @contextmanager
+    def open_database(db_path: str):
+        """Open a COLMAP database with version compatibility.
+
+        pycolmap 3.13+: Database.open(path) is a static method that returns instance
+        pycolmap 3.12: Database().open(path) is an instance method
+        """
+        try:
+            # Try 3.13+ API (static method with context manager)
+            with pycolmap.Database.open(db_path) as db:
+                yield db
+        except (TypeError, AttributeError):
+            # Fall back to 3.12 API (instance method, no context manager)
+            db = pycolmap.Database()
+            db.open(db_path)
+            try:
+                yield db
+            finally:
+                db.close()
+
+    @staticmethod
+    def get_db_count(db, attr_name: str) -> int:
+        """Get database count with version compatibility.
+
+        pycolmap 3.13+: num_* are methods
+        pycolmap 3.12: num_* are properties
+        """
+        attr = getattr(db, attr_name)
+        return attr() if callable(attr) else attr
