@@ -51,7 +51,34 @@ The pre-built `pycolmap` wheels from PyPI **do not include CUDA support**. To en
 - Ninja build system
 - Build tools (gcc, make, etc.)
 
-#### Build Steps
+#### Automated Build (Recommended)
+
+First, build COLMAP with CUDA support, then use the provided script to build pycolmap:
+
+1. **Build COLMAP** (one-time setup):
+   ```bash
+   cd third_party/colmap
+   mkdir -p build && cd build
+   cmake .. -GNinja -DCMAKE_BUILD_TYPE=Release -DCUDA_ENABLED=ON
+   ninja
+   cmake --install . --prefix ../install
+   cd ../../..  # Return to project root
+   ```
+
+2. **Build pycolmap** using the automated script:
+   ```bash
+   ./scripts/build_pycolmap.sh
+   ```
+
+The script will:
+- Check all required dependencies (CUDA, CMake, Ninja, build tools)
+- Verify COLMAP is already built and installed
+- Install pycolmap with CUDA support
+- Verify CUDA is working correctly
+
+#### Manual Build Steps
+
+If you prefer to build manually or need to customize the build process:
 
 1. **Build and install COLMAP** (already provided as a git submodule):
    ```bash
@@ -219,6 +246,7 @@ vit-colmap/
 │   ├── database/                 # COLMAP database utilities
 │   └── utils/                    # Configuration and utilities
 ├── scripts/                      # Utility scripts
+│   ├── build_pycolmap.sh        # Build pycolmap with CUDA support
 │   └── run_DTU_colmap.sh        # DTU dataset runner
 └── tests/                        # Tests
     └── test_smoke_e2e.py        # End-to-end integration test
