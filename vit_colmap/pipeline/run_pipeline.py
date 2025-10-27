@@ -10,6 +10,8 @@ from vit_colmap.features.colmap_sift_extractor import ColmapSiftExtractor
 from vit_colmap.features.dummy_extractor import DummyExtractor
 from vit_colmap.utils.config import Config
 from vit_colmap.database.colmap_db import ColmapDatabase
+from vit_colmap.utils.metrics import MetricsExtractor, MetricsResult
+from vit_colmap.utils.export import export_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -57,36 +59,111 @@ class Pipeline:
             logger.info(f"  - Images processed: {num_images}")
             logger.info(f"  - Cameras: {num_cameras}")
 
-            # Feature matching summary
-            if do_matching:
-                num_matched_pairs = ColmapDatabase.get_db_count(
-                    db, "num_matched_image_pairs"
-                )
-                # Try to get verified pairs (may not be available in all versions)
-                try:
-                    num_verified_pairs = ColmapDatabase.get_db_count(
-                        db, "num_verified_image_pairs"
-                    )
-                except AttributeError:
-                    num_verified_pairs = None
+        # Feature matching summary
+        logger.info("")
+        if do_matching:
+            # Extract comprehensive matching statistics using MetricsExtractor
+            from vit_colmap.utils.metrics import MetricsExtractor
 
-                total_possible_pairs = num_images * (num_images - 1) // 2
-                match_rate = (
-                    (num_matched_pairs / total_possible_pairs * 100)
-                    if total_possible_pairs > 0
+            extractor = MetricsExtractor(db_path=db_path, output_dir=output_dir)
+            min_threshold = self.config.reconstruction.min_num_matches
+            matching_metrics = extractor.extract_matching_metrics(
+                min_threshold=min_threshold
+            )
+
+            total_possible_pairs = num_images * (num_images - 1) // 2
+            raw_rate = (
+                (matching_metrics.matched_pairs / total_possible_pairs * 100)
+                if total_possible_pairs > 0
+                else 0
+            )
+
+            logger.info("Feature Matching:")
+
+            # Stage 1: Raw Feature Matching
+            logger.info("  Stage 1: Raw Feature Matching")
+            logger.info(
+                f"    - Pairs processed: {matching_metrics.matched_pairs} / {total_possible_pairs} ({raw_rate:.1f}%)"
+            )
+            if matching_metrics.total_raw_matches > 0:
+                logger.info(
+                    f"    - Total raw matches: {matching_metrics.total_raw_matches:,}"
+                )
+                logger.info(
+                    f"    - Avg matches/pair: {matching_metrics.avg_raw_matches:.1f} (range: {matching_metrics.min_raw_matches}-{matching_metrics.max_raw_matches})"
+                )
+            else:
+                logger.info("    - No raw matches found")
+
+            # Stage 2: Geometric Verification
+            logger.info("")
+            logger.info("  Stage 2: Geometric Verification (RANSAC)")
+            if matching_metrics.verified_pairs > 0:
+                logger.info(
+                    f"    - Pairs verified: {matching_metrics.verified_pairs} / {matching_metrics.matched_pairs} ({matching_metrics.verification_rate:.1f}%)"
+                )
+                logger.info(
+                    f"    - Total inliers: {matching_metrics.total_inlier_matches:,}"
+                )
+                logger.info(
+                    f"    - Avg inliers/pair: {matching_metrics.avg_inlier_matches:.1f} (range: {matching_metrics.min_inlier_matches}-{matching_metrics.max_inlier_matches})"
+                )
+                logger.info(
+                    f"    - Inlier ratio: {matching_metrics.inlier_ratio*100:.1f}%"
+                )
+            else:
+                logger.info("    - No pairs verified (geometric verification failed)")
+
+            # Configuration distribution
+            if matching_metrics.verified_pairs > 0:
+                config_parts = []
+                for config_name in ["CALIBRATED", "UNCALIBRATED", "DEGENERATE"]:
+                    count = matching_metrics.config_distribution.get(config_name, 0)
+                    pct = (
+                        (count / matching_metrics.verified_pairs * 100)
+                        if matching_metrics.verified_pairs > 0
+                        else 0
+                    )
+                    config_parts.append(f"{config_name}={count} ({pct:.0f}%)")
+
+                # Add other configs if present
+                other_count = sum(
+                    v
+                    for k, v in matching_metrics.config_distribution.items()
+                    if k not in ["CALIBRATED", "UNCALIBRATED", "DEGENERATE"]
+                )
+                if other_count > 0:
+                    pct = other_count / matching_metrics.verified_pairs * 100
+                    config_parts.append(f"OTHER={other_count} ({pct:.0f}%)")
+
+                logger.info("")
+                logger.info("  Configuration: " + " | ".join(config_parts))
+
+            # Quality assessment
+            if matching_metrics.verified_pairs > 0:
+                usable_pct = (
+                    (
+                        matching_metrics.pairs_above_threshold
+                        / matching_metrics.verified_pairs
+                        * 100
+                    )
+                    if matching_metrics.verified_pairs > 0
                     else 0
                 )
 
+                if matching_metrics.pairs_above_threshold > 0:
+                    status_icon = "✓"
+                elif matching_metrics.pairs_above_threshold == 0:
+                    status_icon = "✗"
+                else:
+                    status_icon = "⚠"
+
                 logger.info("")
-                logger.info("Feature Matching:")
                 logger.info(
-                    f"  - Matched image pairs: {num_matched_pairs} / {total_possible_pairs} ({match_rate:.1f}%)"
+                    f"  Quality: {status_icon} {matching_metrics.pairs_above_threshold} pairs ({usable_pct:.1f}%) meet threshold (≥{min_threshold} inliers)"
                 )
-                if num_verified_pairs is not None:
-                    logger.info(f"  - Verified image pairs: {num_verified_pairs}")
-            else:
-                logger.info("")
-                logger.info("Feature Matching: SKIPPED")
+        else:
+            logger.info("Feature Matching: SKIPPED")
 
         # 3D Reconstruction summary
         logger.info("")
@@ -130,11 +207,77 @@ class Pipeline:
         logger.info("=" * 60)
         logger.info("")
 
+    def extract_and_export_metrics(
+        self,
+        db_path: Path,
+        output_dir: Path,
+        reconstructions: Optional[dict[int, pycolmap.Reconstruction]],
+        dataset: str,
+        scene: str,
+        results_dir: Optional[Path] = None,
+    ) -> Optional[MetricsResult]:
+        """Extract metrics and optionally export them.
+
+        Args:
+            db_path: Path to COLMAP database
+            output_dir: Output directory for reconstruction
+            reconstructions: Dictionary of reconstructions
+            dataset: Dataset name (e.g., "DTU")
+            scene: Scene/scan name (e.g., "scan1")
+            results_dir: Directory to export results (if None, no export)
+
+        Returns:
+            MetricsResult object, or None if extraction fails
+        """
+        try:
+            # Create metrics extractor
+            extractor_obj = MetricsExtractor(db_path=db_path, output_dir=output_dir)
+
+            # Extract all metrics
+            extractor_type = self.config.extractor.extractor_type
+            if extractor_type == "colmap_sift":
+                extractor_type = "sift"  # Normalize name
+            elif extractor_type == "vit":
+                extractor_type = "vit"
+            elif extractor_type == "dummy":
+                extractor_type = "dummy"
+
+            config_dict = {
+                "camera_model": self.config.camera.model,
+                "min_num_matches": self.config.reconstruction.min_num_matches,
+                "matching_max_ratio": self.config.matching.max_ratio,
+                "matching_use_gpu": self.config.matching.use_gpu,
+            }
+
+            metrics = extractor_obj.extract_all_metrics(
+                dataset=dataset,
+                scene=scene,
+                extractor_type=extractor_type,
+                config=config_dict,
+                reconstructions=reconstructions,
+            )
+
+            # Export if results directory specified
+            if results_dir:
+                export_metrics(metrics, results_dir, formats=["json", "csv"])
+
+            return metrics
+
+        except Exception as e:
+            logger.error(f"Failed to extract/export metrics: {e}")
+            import traceback
+
+            traceback.print_exc()
+            return None
+
     def run(
         self,
         image_dir: Path,
         output_dir: Path,
         db_path: Path,
+        dataset: Optional[str] = None,
+        scene: Optional[str] = None,
+        results_dir: Optional[Path] = None,
     ) -> Optional[dict[int, pycolmap.Reconstruction]]:
         """
         Run the full SfM pipeline: feature extraction, matching, and reconstruction.
@@ -145,6 +288,9 @@ class Pipeline:
             image_dir: Directory containing input images
             output_dir: Directory for output reconstruction
             db_path: Path to COLMAP database file
+            dataset: Dataset name for metrics (e.g., "DTU")
+            scene: Scene/scan name for metrics (e.g., "scan1")
+            results_dir: Directory to export metrics (if None, no export)
 
         Returns:
             Dictionary of reconstructions if do_reconstruction=True, else None
@@ -248,6 +394,17 @@ class Pipeline:
             reconstructions=reconstructions,
         )
 
+        # Extract and export metrics if requested
+        if dataset and scene:
+            self.extract_and_export_metrics(
+                db_path=db_path,
+                output_dir=output_dir,
+                reconstructions=reconstructions,
+                dataset=dataset,
+                scene=scene,
+                results_dir=results_dir,
+            )
+
         return reconstructions
 
 
@@ -295,6 +452,24 @@ def main() -> None:
         action="store_true",
         help="Use COLMAP's built-in SIFT instead of ViT extractor",
     )
+    ap.add_argument(
+        "--dataset",
+        type=str,
+        default=None,
+        help="Dataset name for metrics (e.g., DTU, HPatches)",
+    )
+    ap.add_argument(
+        "--scene",
+        type=str,
+        default=None,
+        help="Scene/scan name for metrics (e.g., scan1)",
+    )
+    ap.add_argument(
+        "--export-metrics",
+        type=Path,
+        default=None,
+        help="Directory to export metrics (e.g., data/results)",
+    )
     args = ap.parse_args()
 
     # Create configuration from arguments
@@ -308,6 +483,9 @@ def main() -> None:
         image_dir=args.images,
         output_dir=args.output,
         db_path=args.db,
+        dataset=args.dataset,
+        scene=args.scene,
+        results_dir=args.export_metrics,
     )
 
     logger.info("Pipeline complete!")

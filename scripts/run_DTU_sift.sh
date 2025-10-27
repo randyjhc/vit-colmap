@@ -1,11 +1,11 @@
 #!/bin/bash
 
-# Script to run ViT-COLMAP pipeline on DTU dataset
+# Script to run ViT-COLMAP pipeline with SIFT on DTU dataset
 # DTU images are 1600x1200 pixels
 # Using PINHOLE camera model as DTU provides calibrated intrinsics
 
-# Usage: ./scripts/run_DTU_colmap.sh [scan_name]
-# Example: ./scripts/run_DTU_colmap.sh scan1
+# Usage: ./scripts/run_DTU_sift.sh [scan_name]
+# Example: ./scripts/run_DTU_sift.sh scan1
 
 # Check if running from project root directory
 if [ ! -f "vit_colmap/__init__.py" ] && [ ! -f "pyproject.toml" ]; then
@@ -18,7 +18,7 @@ if [ ! -f "vit_colmap/__init__.py" ] && [ ! -f "pyproject.toml" ]; then
     echo "  ├── data/"
     echo "  └── pyproject.toml"
     echo ""
-    echo "Please cd to the project root and run: ./scripts/run_DTU_colmap.sh <scan_name>"
+    echo "Please cd to the project root and run: ./scripts/run_DTU_sift.sh <scan_name>"
     exit 1
 fi
 
@@ -35,8 +35,9 @@ fi
 SCAN_NAME="$1"
 DTU_BASE="data/raw/DTU/Cleaned"
 IMAGE_DIR="${DTU_BASE}/${SCAN_NAME}"
-OUTPUT_DIR="data/outputs/DTU/${SCAN_NAME}"
-DB_PATH="data/intermediate/DTU/${SCAN_NAME}/database.db"
+OUTPUT_DIR="data/outputs/DTU/${SCAN_NAME}_sift"
+DB_PATH="data/intermediate/DTU/${SCAN_NAME}/sift_database.db"
+RESULTS_DIR="data/results"
 
 # Check if image directory exists
 if [ ! -d "$IMAGE_DIR" ]; then
@@ -71,7 +72,7 @@ for img in ${IMAGE_DIR}/*_3_r5000.png; do
     ln -s "$(realpath $img)" "$TEMP_IMAGE_DIR/$(basename $img)"
 done
 
-# Run the pipeline
+# Run the pipeline with SIFT
 # Note: DTU provides calibrated cameras, but for now we use estimated intrinsics
 # You can later modify this to load actual DTU calibration data
 echo "Running COLMAP pipeline with SIFT on DTU ${SCAN_NAME}..."
@@ -81,7 +82,11 @@ python -m vit_colmap.pipeline.run_pipeline \
     --db "$DB_PATH" \
     --camera-model PINHOLE \
     --use-colmap-sift \
+    --dataset DTU \
+    --scene "$SCAN_NAME" \
+    --export-metrics "$RESULTS_DIR" \
     --verbose
 
 echo "Pipeline complete!"
 echo "Results saved to: $OUTPUT_DIR"
+echo "Metrics exported to: ${RESULTS_DIR}/DTU/${SCAN_NAME}/"
