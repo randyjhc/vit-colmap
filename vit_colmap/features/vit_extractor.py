@@ -225,15 +225,12 @@ class ViTExtractor(BaseExtractor):
         # L2 normalize descriptors
         descriptors = F.normalize(descriptors, p=2, dim=1)
 
-        # Convert to numpy and scale to uint8 [0, 255]
+        # Convert to numpy
         keypoints_np = keypoints.cpu().numpy().astype(np.float32)
         descriptors_float = descriptors.cpu().numpy()
 
-        # Convert normalized descriptors to uint8
-        # Map from [-1, 1] to [0, 255]
-        descriptors_uint8 = (
-            ((descriptors_float + 1.0) * 127.5).clip(0, 255).astype(np.uint8)
-        )
+        # Standard conversion: multiply by 512, round, clip to uint8
+        descriptors_uint8 = (descriptors_float * 512.0).clip(0, 255).astype(np.uint8)
 
         return keypoints_np, descriptors_uint8
 
