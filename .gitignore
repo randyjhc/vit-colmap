@@ -215,3 +215,9 @@ data/**/DTU/
 # Allow .gitkeep and README files
 !**/.gitkeep
 !**/README.md
+
+# Experiment data
+experiments/outputs/
+**/*.png
+**/*.json
+**/*.csv

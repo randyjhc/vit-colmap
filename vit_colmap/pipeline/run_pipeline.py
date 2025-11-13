@@ -6,6 +6,8 @@ import pycolmap
 
 from vit_colmap.features.base_extractor import BaseExtractor
 from vit_colmap.features.vit_extractor import ViTExtractor
+
+# Note: BEiT is now only for visualization, not COLMAP feature extraction
 from vit_colmap.features.colmap_sift_extractor import ColmapSiftExtractor
 from vit_colmap.features.dummy_extractor import DummyExtractor
 from vit_colmap.utils.config import Config
@@ -324,6 +326,7 @@ class Pipeline:
             logger.info("Using COLMAP SIFT extractor")
             extractor = ColmapSiftExtractor()
         else:
+            # Default to ViT extractor
             logger.info("Using ViT extractor")
             extractor = ViTExtractor(
                 weights_path=self.config.extractor.vit_weights_path
@@ -451,6 +454,12 @@ def main() -> None:
         "--use-colmap-sift",
         action="store_true",
         help="Use COLMAP's built-in SIFT instead of ViT extractor",
+    )
+    ap.add_argument(
+        "--num-keypoints",
+        type=int,
+        default=2048,
+        help="Number of keypoints to extract per image (default: 2048)",
     )
     ap.add_argument(
         "--dataset",

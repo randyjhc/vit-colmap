@@ -116,8 +116,17 @@ class ReconstructionConfig:
 class ExtractorConfig:
     """Feature extractor configuration."""
 
-    extractor_type: str = "vit"  # "vit" or "colmap_sift"
+    extractor_type: str = "vit"  # "vit", "colmap_sift", or "dummy"
+
+    # ViT-specific
     vit_weights_path: Optional[str] = None
+
+    # BEiT is now only for visualization, not feature extraction for COLMAP
+    # If you need BEiT features, use it separately via beit_extractor.py
+
+    # Common parameters
+    num_keypoints: int = 2048
+    descriptor_dim: int = 128
 
 
 @dataclass
@@ -160,8 +169,16 @@ class Config:
         # Update extractor config
         if hasattr(args, "use_colmap_sift") and args.use_colmap_sift:
             config.extractor.extractor_type = "colmap_sift"
+        # Note: BEiT is no longer supported for COLMAP feature extraction
+        # Use BEiT separately for visualization only
+
+        # ViT-specific
         if hasattr(args, "model") and args.model:
             config.extractor.vit_weights_path = str(args.model)
+
+        # Common extractor parameters
+        if hasattr(args, "num_keypoints"):
+            config.extractor.num_keypoints = args.num_keypoints
 
         # Update matching config
         if hasattr(args, "use_gpu"):
@@ -185,10 +202,24 @@ class Config:
         lines = [
             "Configuration:",
             f"  Extractor: {self.extractor.extractor_type}",
-            f"  Camera model: {self.camera.model}",
-            f"  Matching: {'enabled' if self.do_matching else 'disabled'}",
-            f"  Reconstruction: {'enabled' if self.do_reconstruction else 'disabled'}",
-            f"  GPU matching: {'enabled' if self.matching.use_gpu else 'disabled'}",
-            f"  Min matches: {self.reconstruction.min_num_matches}",
         ]
+
+        # Add extractor-specific details
+        if self.extractor.extractor_type == "vit":
+            lines.append(f"    - Num keypoints: {self.extractor.num_keypoints}")
+            lines.append(f"    - Descriptor dim: {self.extractor.descriptor_dim}")
+            if self.extractor.vit_weights_path:
+                lines.append(f"    - Weights: {self.extractor.vit_weights_path}")
+        elif self.extractor.extractor_type == "colmap_sift":
+            lines.append("    - Using COLMAP's built-in SIFT")
+
+        lines.extend(
+            [
+                f"  Camera model: {self.camera.model}",
+                f"  Matching: {'enabled' if self.do_matching else 'disabled'}",
+                f"  Reconstruction: {'enabled' if self.do_reconstruction else 'disabled'}",
+                f"  GPU matching: {'enabled' if self.matching.use_gpu else 'disabled'}",
+                f"  Min matches: {self.reconstruction.min_num_matches}",
+            ]
+        )
         return "\n".join(lines)
