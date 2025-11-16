@@ -101,20 +101,20 @@ def create_visualization(
     ax2.axis("off")
 
     ax3 = fig.add_subplot(gs[0, 2])
-    feat1_rgb = features_to_rgb(features1_np, method="norm")
+    feat1_rgb = features_to_rgb(features1_np)
     ax3.imshow(feat1_rgb)
     ax3.set_title("Features 1 (PCA)")
     ax3.axis("off")
 
     ax4 = fig.add_subplot(gs[0, 3])
-    feat2_rgb = features_to_rgb(features2_np, method="norm")
+    feat2_rgb = features_to_rgb(features2_np)
     ax4.imshow(feat2_rgb)
     ax4.set_title("Features 2 (PCA)")
     ax4.axis("off")
 
     # Row 2: Warped features and comparison
     ax5 = fig.add_subplot(gs[1, 0])
-    warped_rgb = features_to_rgb(warped_features1_np, method="norm")
+    warped_rgb = features_to_rgb(warped_features1_np)
     ax5.imshow(warped_rgb)
     ax5.set_title("Warped Features 1 (PCA)")
     ax5.axis("off")
