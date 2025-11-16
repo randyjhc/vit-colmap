@@ -215,3 +215,8 @@ data/**/DTU/
 # Allow .gitkeep and README files
 !**/.gitkeep
 !**/README.md
+
+# Output Artifacts
+experiments/outputs/*
+outputs/*
+**/*.png

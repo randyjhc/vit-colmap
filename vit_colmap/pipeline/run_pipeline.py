@@ -8,6 +8,7 @@ from vit_colmap.features.base_extractor import BaseExtractor
 from vit_colmap.features.vit_extractor import ViTExtractor
 from vit_colmap.features.colmap_sift_extractor import ColmapSiftExtractor
 from vit_colmap.features.dummy_extractor import DummyExtractor
+from vit_colmap.features.trainable_vit_extractor import TrainableViTExtractor
 from vit_colmap.utils.config import Config
 from vit_colmap.database.colmap_db import ColmapDatabase
 from vit_colmap.utils.metrics import MetricsExtractor, MetricsResult
@@ -323,6 +324,11 @@ class Pipeline:
         elif self.config.extractor.extractor_type == "colmap_sift":
             logger.info("Using COLMAP SIFT extractor")
             extractor = ColmapSiftExtractor()
+        elif self.config.extractor.extractor_type == "trainable_vit":
+            logger.info("Using Trainable ViT extractor")
+            extractor = TrainableViTExtractor(
+                weights_path=self.config.extractor.vit_weights_path
+            )
         else:
             logger.info("Using ViT extractor")
             extractor = ViTExtractor(
@@ -451,6 +457,19 @@ def main() -> None:
         "--use-colmap-sift",
         action="store_true",
         help="Use COLMAP's built-in SIFT instead of ViT extractor",
+    )
+    ap.add_argument(
+        "--extractor",
+        type=str,
+        default=None,
+        choices=["vit", "trainable_vit", "colmap_sift", "dummy"],
+        help="Feature extractor type (default: vit)",
+    )
+    ap.add_argument(
+        "--vit-weights",
+        type=Path,
+        default=None,
+        help="Path to trained ViT model weights (for vit or trainable_vit extractors)",
     )
     ap.add_argument(
         "--dataset",

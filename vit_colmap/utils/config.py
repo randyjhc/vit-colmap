@@ -158,9 +158,13 @@ class Config:
             config.camera.model = args.camera_model
 
         # Update extractor config
-        if hasattr(args, "use_colmap_sift") and args.use_colmap_sift:
+        if hasattr(args, "extractor") and args.extractor:
+            config.extractor.extractor_type = args.extractor
+        elif hasattr(args, "use_colmap_sift") and args.use_colmap_sift:
             config.extractor.extractor_type = "colmap_sift"
-        if hasattr(args, "model") and args.model:
+        if hasattr(args, "vit_weights") and args.vit_weights:
+            config.extractor.vit_weights_path = str(args.vit_weights)
+        elif hasattr(args, "model") and args.model:
             config.extractor.vit_weights_path = str(args.model)
 
         # Update matching config
