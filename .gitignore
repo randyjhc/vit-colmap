@@ -211,6 +211,7 @@ __marimo__/
 
 # Dataset files
 data/**/DTU/
+data/**/HPatches/
 
 # Allow .gitkeep and README files
 !**/.gitkeep
