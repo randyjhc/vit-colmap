@@ -231,6 +231,72 @@ class ViTFeatureModel(nn.Module):
             "features": trunk_features,  # (B, 256, H/4, W/4)
         }
 
+    def forward_from_backbone_features(
+        self,
+        backbone_features: torch.Tensor,
+        target_size: Optional[Tuple[int, int]] = None,
+    ) -> Dict[str, torch.Tensor]:
+        """
+        Forward pass starting from pre-extracted backbone features.
+
+        This is useful for avoiding redundant backbone computations when the same
+        backbone features need to be processed multiple times (e.g., for sampling
+        and then for head predictions).
+
+        Args:
+            backbone_features: (B, C, H_p, W_p) pre-extracted backbone features
+            target_size: Optional (H, W) to resize output feature maps to.
+                        If None, must infer from backbone features.
+
+        Returns:
+            Dictionary containing:
+                - 'keypoints': (B, 4, H_out, W_out) - score, dx, dy, orientation
+                - 'descriptors': (B, 128, H_out, W_out) - dense descriptor map
+                - 'features': (B, 256, H_out, W_out) - shared feature trunk output
+        """
+        # 1. Upsample to higher resolution
+        upsampled = self.upsampler(backbone_features)
+
+        # 2. Adjust to target size
+        if target_size is None:
+            # Infer original image size from backbone feature size
+            # backbone is at 1/14 resolution, so original = backbone * 14
+            # target is 1/4 of original
+            H_p, W_p = backbone_features.shape[2:]
+            target_h = (H_p * self.patch_size) // 4
+            target_w = (W_p * self.patch_size) // 4
+        else:
+            target_h, target_w = target_size
+
+        # Resize to exact target size using bilinear interpolation
+        if upsampled.shape[2:] != (target_h, target_w):
+            upsampled = F.interpolate(
+                upsampled,
+                size=(target_h, target_w),
+                mode="bilinear",
+                align_corners=False,
+            )
+
+        # 3. Shared trunk (B, 512, H/4, W/4) -> (B, 256, H/4, W/4)
+        trunk_features = self.trunk(upsampled)
+
+        # 4. Detection heads
+        keypoints = self.keypoint_head(trunk_features)
+        descriptors = self.descriptor_head(trunk_features)
+
+        # Bound orientation to [-π, π] using tanh
+        keypoints = keypoints.clone()
+        keypoints[:, 3] = torch.tanh(keypoints[:, 3]) * torch.pi
+
+        # Normalize descriptors to unit length
+        descriptors = F.normalize(descriptors, p=2, dim=1)
+
+        return {
+            "keypoints": keypoints,  # (B, 4, H/4, W/4)
+            "descriptors": descriptors,  # (B, 128, H/4, W/4)
+            "features": trunk_features,  # (B, 256, H/4, W/4)
+        }
+
     def get_trainable_parameters(self):
         """Get parameters that require gradients (excludes frozen backbone)."""
         return [p for p in self.parameters() if p.requires_grad]

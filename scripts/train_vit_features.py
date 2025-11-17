@@ -15,6 +15,8 @@ from pathlib import Path
 from datetime import datetime
 import torch
 from torch.utils.data import DataLoader
+from torch.amp import GradScaler, autocast
+from tqdm import tqdm
 
 # Suppress duplicate library warnings
 import os
@@ -93,6 +95,8 @@ def train_one_epoch(
     epoch,
     log_interval,
     log_file,
+    scaler=None,
+    use_amp=False,
 ):
     """Train for one epoch."""
     model.train()
@@ -107,7 +111,16 @@ def train_one_epoch(
 
     start_time = time.time()
 
-    for batch_idx, batch in enumerate(dataloader):
+    # Create progress bar
+    pbar = tqdm(
+        enumerate(dataloader),
+        total=len(dataloader),
+        desc=f"Epoch {epoch}",
+        unit="batch",
+        leave=True,
+    )
+
+    for batch_idx, batch in pbar:
         # Move data to device
         batch = {
             k: v.to(device) if isinstance(v, torch.Tensor) else v
@@ -115,20 +128,33 @@ def train_one_epoch(
         }
 
         try:
-            # Process batch to get positive/negative samples
-            outputs, targets = processor.process_batch(batch)
+            # Use automatic mixed precision if enabled
+            with autocast(device_type=device.type, enabled=use_amp):
+                # Process batch to get positive/negative samples
+                outputs, targets = processor.process_batch(batch)
 
-            # Compute losses
-            losses = loss_fn(outputs, targets)
+                # Compute losses
+                losses = loss_fn(outputs, targets)
 
-            # Backward pass
+            # Backward pass with gradient scaling for AMP
             optimizer.zero_grad()
-            losses["total"].backward()
 
-            # Gradient clipping
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            if scaler is not None:
+                scaler.scale(losses["total"]).backward()
 
-            optimizer.step()
+                # Gradient clipping (unscale first for proper clipping)
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                losses["total"].backward()
+
+                # Gradient clipping
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+
+                optimizer.step()
 
             # Update scheduler if step-based
             if scheduler is not None and hasattr(scheduler, "step_batch"):
@@ -140,7 +166,17 @@ def train_one_epoch(
                     epoch_losses[key] += losses[key].item()
             num_batches += 1
 
-            # Log progress
+            # Update progress bar
+            pbar.set_postfix(
+                {
+                    "loss": f"{losses['total'].item():.4f}",
+                    "det": f"{losses['detector'].item():.4f}",
+                    "rot": f"{losses['rotation'].item():.4f}",
+                    "desc": f"{losses['descriptor'].item():.4f}",
+                }
+            )
+
+            # Log to file at intervals (less verbose than before since tqdm shows progress)
             if (batch_idx + 1) % log_interval == 0:
                 elapsed = time.time() - start_time
                 batches_per_sec = (batch_idx + 1) / elapsed
@@ -148,11 +184,9 @@ def train_one_epoch(
                 log_message(
                     f"Epoch {epoch} | Batch {batch_idx + 1}/{len(dataloader)} | "
                     f"Loss: {losses['total'].item():.4f} | "
-                    f"Det: {losses['detector'].item():.4f} | "
-                    f"Rot: {losses['rotation'].item():.4f} | "
-                    f"Desc: {losses['descriptor'].item():.4f} | "
                     f"Speed: {batches_per_sec:.2f} batch/s",
                     log_file,
+                    print_msg=False,  # Don't print since tqdm shows progress
                 )
 
         except Exception as e:
@@ -161,6 +195,8 @@ def train_one_epoch(
 
             traceback.print_exc()
             continue
+
+    pbar.close()
 
     # Average losses
     if num_batches > 0:
@@ -181,7 +217,7 @@ def train_one_epoch(
     return epoch_losses
 
 
-def validate(model, dataloader, processor, loss_fn, device, log_file):
+def validate(model, dataloader, processor, loss_fn, device, log_file, use_amp=False):
     """Run validation."""
     model.eval()
 
@@ -193,24 +229,31 @@ def validate(model, dataloader, processor, loss_fn, device, log_file):
     }
     num_batches = 0
 
+    pbar = tqdm(dataloader, desc="Validation", unit="batch", leave=False)
+
     with torch.no_grad():
-        for batch in dataloader:
+        for batch in pbar:
             batch = {
                 k: v.to(device) if isinstance(v, torch.Tensor) else v
                 for k, v in batch.items()
             }
 
             try:
-                outputs, targets = processor.process_batch(batch)
-                losses = loss_fn(outputs, targets)
+                with autocast(device_type=device.type, enabled=use_amp):
+                    outputs, targets = processor.process_batch(batch)
+                    losses = loss_fn(outputs, targets)
 
                 for key in val_losses:
                     if key in losses:
                         val_losses[key] += losses[key].item()
                 num_batches += 1
+
+                pbar.set_postfix({"loss": f"{losses['total'].item():.4f}"})
             except Exception as e:
                 log_message(f"Validation error: {e}", log_file)
                 continue
+
+    pbar.close()
 
     if num_batches > 0:
         for key in val_losses:
@@ -326,6 +369,26 @@ def main():
     # Device
     parser.add_argument("--device", type=str, default=None, help="Device (cuda/cpu)")
 
+    # Performance optimization arguments
+    parser.add_argument(
+        "--use-amp",
+        action="store_true",
+        default=False,
+        help="Use automatic mixed precision (AMP) for faster training",
+    )
+    parser.add_argument(
+        "--compile",
+        action="store_true",
+        default=False,
+        help="Use torch.compile() for model optimization (PyTorch 2.0+)",
+    )
+    parser.add_argument(
+        "--cudnn-benchmark",
+        action="store_true",
+        default=False,
+        help="Enable cuDNN benchmark mode for faster training",
+    )
+
     args = parser.parse_args()
 
     # Set device
@@ -336,6 +399,11 @@ def main():
 
     print(f"Using device: {device}")
 
+    # Enable cuDNN benchmark mode if requested
+    if args.cudnn_benchmark and device.type == "cuda":
+        torch.backends.cudnn.benchmark = True
+        print("cuDNN benchmark mode enabled")
+
     # Setup experiment name
     if args.experiment_name is None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -345,6 +413,9 @@ def main():
     log_file = setup_logging(args.log_dir, args.experiment_name)
     log_message(f"Starting experiment: {args.experiment_name}", log_file)
     log_message(f"Arguments: {args}", log_file)
+    log_message(f"AMP enabled: {args.use_amp}", log_file)
+    log_message(f"torch.compile enabled: {args.compile}", log_file)
+    log_message(f"cuDNN benchmark enabled: {args.cudnn_benchmark}", log_file)
 
     # Create checkpoint directory
     args.checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -370,6 +441,26 @@ def main():
 
     param_counts = model.count_parameters()
     log_message(f"Model parameters: {param_counts}", log_file)
+
+    # Apply torch.compile if requested (PyTorch 2.0+)
+    if args.compile:
+        log_message("Applying torch.compile() optimization...", log_file)
+        try:
+            model = torch.compile(model)
+            log_message("torch.compile() applied successfully", log_file)
+        except Exception as e:
+            log_message(
+                f"torch.compile() failed: {e}. Continuing without it.", log_file
+            )
+
+    # Initialize gradient scaler for AMP
+    scaler = (
+        GradScaler(device=device.type)
+        if args.use_amp and device.type == "cuda"
+        else None
+    )
+    if scaler is not None:
+        log_message("GradScaler initialized for AMP training", log_file)
 
     # Initialize dataset
     log_message(f"Loading HPatches dataset from {args.data_root}...", log_file)
@@ -401,6 +492,7 @@ def main():
         collate_fn=collate_fn,
         pin_memory=True if device.type == "cuda" else False,
         drop_last=True,
+        persistent_workers=True if args.num_workers > 0 else False,
     )
 
     val_loader = DataLoader(
@@ -410,6 +502,7 @@ def main():
         num_workers=args.num_workers,
         collate_fn=collate_fn,
         pin_memory=True if device.type == "cuda" else False,
+        persistent_workers=True if args.num_workers > 0 else False,
     )
 
     # Initialize sampler and batch processor
@@ -478,10 +571,20 @@ def main():
             epoch,
             args.log_interval,
             log_file,
+            scaler=scaler,
+            use_amp=args.use_amp,
         )
 
         # Validate
-        val_losses = validate(model, val_loader, processor, loss_fn, device, log_file)
+        val_losses = validate(
+            model,
+            val_loader,
+            processor,
+            loss_fn,
+            device,
+            log_file,
+            use_amp=args.use_amp,
+        )
 
         # Update scheduler
         scheduler.step()

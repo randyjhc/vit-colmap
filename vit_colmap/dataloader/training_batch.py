@@ -221,8 +221,8 @@ class TrainingBatchProcessor:
         B, _, img_H, img_W = img1.shape
         image_size = (img_H, img_W)
 
-        # 1. Extract backbone features (frozen)
-        with torch.no_grad():
+        # 1. Extract backbone features ONCE (frozen, use inference_mode for better perf)
+        with torch.inference_mode():
             features1 = self.model._extract_backbone_features(
                 img1
             )  # (B, 768, H_p, W_p)
@@ -256,15 +256,16 @@ class TrainingBatchProcessor:
         negatives_128d_flat = self.project_to_128d(negatives_flat)
         negatives_128d = negatives_128d_flat.view(B_n, K_n, N_n, 128)
 
-        # 6. Forward pass through full model for keypoint predictions
-        outputs1_full = self.model(img1)
-        outputs2_full = self.model(img2)
+        # 6. Forward pass through trainable heads only (REUSE backbone features)
+        # This avoids redundant backbone passes - major speedup!
+        outputs1_full = self.model.forward_from_backbone_features(features1)
+        outputs2_full = self.model.forward_from_backbone_features(features2)
 
         # 7. Sample orientations at invariant point locations
-        # Map invariant coords (in features2 space) to output space (1/2 resolution)
-        # Feature space is 1/14, output space is 1/2, so scale by 14/2 = 7
-        scale_factor = self.sampler.patch_size / 2.0
-        output_coords = invariant_coords * scale_factor  # Scale to 1/2 resolution space
+        # Map invariant coords (in features2 space) to output space (1/4 resolution)
+        # Feature space is 1/14, output space is 1/4, so scale by 14/4 = 3.5
+        scale_factor = self.sampler.patch_size / 4.0
+        output_coords = invariant_coords * scale_factor  # Scale to 1/4 resolution space
 
         orientations2 = self.sample_orientations_at_coords(
             outputs2_full["keypoints"], output_coords
