@@ -165,7 +165,7 @@ class TrainableViTExtractor(BaseExtractor):
         image_tensor = self.transform(image_rgb).unsqueeze(0).to(self.device)
 
         # Forward pass
-        with torch.no_grad():
+        with torch.inference_mode():
             outputs = self.model(image_tensor)
 
         keypoints_map = outputs["keypoints"].squeeze(0)  # (4, H/2, W/2)
