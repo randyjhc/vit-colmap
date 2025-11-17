@@ -24,6 +24,8 @@ class MetricsPlotter:
         color_sift: Optional[Tuple[float, ...]] = None,
         color_vit: Optional[Tuple[float, ...]] = None,
         enable_cache: bool = True,
+        sift_filename: str = "sift.json",
+        vit_filename: str = "vit.json",
     ):
         """Initialize the MetricsPlotter.
 
@@ -32,11 +34,15 @@ class MetricsPlotter:
             color_sift: RGBA tuple for SIFT bars (defaults to tab10 color 0)
             color_vit: RGBA tuple for ViT bars (defaults to tab10 color 1)
             enable_cache: Whether to cache loaded metrics for performance
+            sift_filename: Name of SIFT metrics JSON file (default: "sift.json")
+            vit_filename: Name of ViT metrics JSON file (default: "vit.json")
         """
         self.results_dir = results_dir.resolve()
         self.color_sift = color_sift or plt.get_cmap("tab10")(0)
         self.color_vit = color_vit or plt.get_cmap("tab10")(1)
         self.enable_cache = enable_cache
+        self.sift_filename = sift_filename
+        self.vit_filename = vit_filename
         self._metrics_cache: Dict[
             str, Tuple[Optional[MetricsResult], Optional[MetricsResult]]
         ] = {}
@@ -56,8 +62,8 @@ class MetricsPlotter:
             return self._metrics_cache[scan_name]
 
         scan_dir = self.results_dir / scan_name
-        sift_path = scan_dir / "sift.json"
-        vit_path = scan_dir / "vit.json"
+        sift_path = scan_dir / self.sift_filename
+        vit_path = scan_dir / self.vit_filename
 
         sift_metrics: Optional[MetricsResult] = None
         vit_metrics: Optional[MetricsResult] = None
@@ -269,24 +275,21 @@ class MetricsPlotter:
 
         # Matching metrics
         matching_labels = [
-            "Matched pairs",
-            "Match rate (%)",
-            "Avg raw matches",
-            "Avg inlier matches",
+            "Processed pairs",
+            "Total raw matches",
+            "Total inliers",
             "Inlier ratio",
         ]
         matching_sift_raw = [
             self._matching_value(sift_metrics, "matched_pairs"),
-            self._matching_value(sift_metrics, "match_rate"),
-            self._matching_value(sift_metrics, "avg_raw_matches"),
-            self._matching_value(sift_metrics, "avg_inlier_matches"),
+            self._matching_value(sift_metrics, "total_raw_matches"),
+            self._matching_value(sift_metrics, "total_inlier_matches"),
             self._matching_value(sift_metrics, "inlier_ratio"),
         ]
         matching_vit_raw = [
             self._matching_value(vit_metrics, "matched_pairs"),
-            self._matching_value(vit_metrics, "match_rate"),
-            self._matching_value(vit_metrics, "avg_raw_matches"),
-            self._matching_value(vit_metrics, "avg_inlier_matches"),
+            self._matching_value(vit_metrics, "total_raw_matches"),
+            self._matching_value(vit_metrics, "total_inlier_matches"),
             self._matching_value(vit_metrics, "inlier_ratio"),
         ]
         self._plot_ratio_panel(

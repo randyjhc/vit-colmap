@@ -19,8 +19,14 @@ A comprehensive metrics extraction and export system has been added to enable ev
 ### 2. Compare Results
 
 ```bash
-# View comparison
+# View comparison for default scan (scan1)
 python scripts/compare_metrics.py
+
+# Compare specific scan
+python scripts/compare_metrics.py scan2
+
+# Compare with custom dataset
+python scripts/compare_metrics.py --dataset DTU scan3
 
 # Or aggregate all results
 python scripts/aggregate_results.py --dataset DTU
@@ -31,7 +37,10 @@ python scripts/aggregate_results.py --dataset DTU
 ```bash
 # Detailed metrics (JSON)
 cat data/results/DTU/scan1/sift.json
-cat data/results/DTU/scan1/vit.json
+cat data/results/DTU/scan1/trainable_vit.json
+
+# Comparison plot (PNG)
+open data/results/DTU/scan1/comparison_plot.png
 
 # Summary table (CSV)
 cat data/results/DTU/summary.csv
@@ -63,10 +72,12 @@ cat data/results/DTU/comparison_report.md
 data/results/
 └── DTU/
     ├── scan1/
-    │   ├── sift.json          # Detailed SIFT metrics
-    │   └── vit.json           # Detailed ViT metrics
-    ├── summary.csv            # All results
-    └── comparison_report.md   # Analysis
+    │   ├── sift.json             # Detailed SIFT metrics
+    │   ├── trainable_vit.json    # Detailed Trainable ViT metrics
+    │   ├── vit.json              # Detailed standard ViT metrics (if run)
+    │   └── comparison_plot.png   # Visual comparison plot
+    ├── summary.csv               # All results
+    └── comparison_report.md      # Analysis
 ```
 
 ## Example Output
@@ -100,14 +111,23 @@ Total 3D points                       35420.00      42380.00       19.6%
 ```python
 from pathlib import Path
 from vit_colmap.utils.export import MetricsExporter
+from vit_colmap.utils.plot_metrics import MetricsPlotter
 
 # Load metrics
 sift = MetricsExporter.load_json(Path("data/results/DTU/scan1/sift.json"))
-vit = MetricsExporter.load_json(Path("data/results/DTU/scan1/vit.json"))
+vit = MetricsExporter.load_json(Path("data/results/DTU/scan1/trainable_vit.json"))
 
 # Compare
 print(f"SIFT: {sift.reconstruction.total_3d_points} points")
 print(f"ViT:  {vit.reconstruction.total_3d_points} points")
+
+# Generate plots with custom filenames
+plotter = MetricsPlotter(
+    Path("data/results/DTU"),
+    sift_filename="sift.json",
+    vit_filename="trainable_vit.json"
+)
+plotter.plot_single_scan("scan1", output_path=Path("comparison.png"))
 ```
 
 ## Integration with Existing Pipeline

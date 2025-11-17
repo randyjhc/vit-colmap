@@ -7,20 +7,60 @@ This script demonstrates how to:
 3. Generate custom analysis and visualizations
 """
 
+import argparse
 from pathlib import Path
 from vit_colmap.utils.export import MetricsExporter
 from vit_colmap.utils.plot_metrics import MetricsPlotter
+
+# Centralized filename configuration - single source of truth
+SIFT_FILENAME = "sift.json"
+VIT_FILENAME = "trainable_vit.json"
 
 
 def main():
     """Load and compare metrics from SIFT and ViT runs."""
 
-    # Define paths
-    results_dir = Path("data/results/DTU")
-    scan_name = "scan1"
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(
+        description="Compare SIFT and ViT metrics for a DTU scan",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python scripts/compare_metrics.py scan1
+  python scripts/compare_metrics.py scan2
+  python scripts/compare_metrics.py --dataset DTU --scan scan1
+        """,
+    )
+    parser.add_argument(
+        "scan_name",
+        nargs="?",
+        default="scan1",
+        help="Name of the scan to compare (default: scan1)",
+    )
+    parser.add_argument(
+        "--dataset",
+        default="DTU",
+        help="Dataset name (default: DTU)",
+    )
+    parser.add_argument(
+        "--results-dir",
+        type=Path,
+        default=None,
+        help="Results directory (default: data/results/{dataset})",
+    )
 
-    sift_path = results_dir / scan_name / "sift.json"
-    vit_path = results_dir / scan_name / "vit.json"
+    args = parser.parse_args()
+
+    # Define paths
+    if args.results_dir:
+        results_dir = args.results_dir
+    else:
+        results_dir = Path("data/results") / args.dataset
+
+    scan_name = args.scan_name
+
+    sift_path = results_dir / scan_name / SIFT_FILENAME
+    vit_path = results_dir / scan_name / VIT_FILENAME
 
     # Check if files exist
     if not sift_path.exists():
@@ -68,10 +108,9 @@ def main():
     print("-" * 70)
 
     matching_metrics = [
-        ("Matched pairs", "matched_pairs"),
-        ("Match rate (%)", "match_rate"),
-        ("Avg raw matches", "avg_raw_matches"),
-        ("Avg inlier matches", "avg_inlier_matches"),
+        ("Processed image pairs", "matched_pairs"),
+        ("Total raw matches", "total_raw_matches"),
+        ("Total inlier matches", "total_inlier_matches"),
         ("Inlier ratio", "inlier_ratio"),
     ]
 
@@ -140,7 +179,12 @@ def main():
 
     # Generate comparison plot
     plot_output = results_dir / scan_name / "comparison_plot.png"
-    plotter = MetricsPlotter(results_dir, enable_cache=False)
+    plotter = MetricsPlotter(
+        results_dir,
+        enable_cache=False,
+        sift_filename=SIFT_FILENAME,
+        vit_filename=VIT_FILENAME,
+    )
     generated = plotter.plot_single_scan(scan_name, output_path=plot_output)
     if generated:
         print(f"Saved comparison plot to: {generated}")
