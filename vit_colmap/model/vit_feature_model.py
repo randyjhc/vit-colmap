@@ -35,7 +35,7 @@ class ViTFeatureModel(nn.Module):
 
     Architecture:
     1. Frozen DINOv2 backbone (768D or 1024D features at 1/14 resolution)
-    2. Progressive upsampling to 1/2 original resolution
+    2. Progressive upsampling to 1/4 original resolution
     3. Shared trunk for feature refinement
     4. Two heads: keypoint detection (4D) and descriptor extraction (128D)
     """
@@ -82,16 +82,14 @@ class ViTFeatureModel(nn.Module):
                 param.requires_grad = False
             self.backbone.eval()
 
-        # Build upsampler: from 1/14 to 1/2 resolution
-        # Need ~7x upsampling (14/2 = 7)
-        # Using 3 upsample blocks: 2^3 = 8x (slightly more than needed)
-        # Actual: 1/14 -> 1/7 -> 1/3.5 -> 1/1.75 (we'll adjust final size)
+        # Build upsampler: from 1/14 to 1/4 resolution
+        # Need ~3.5x upsampling (14/4 = 3.5)
+        # Using 2 upsample blocks: 2^2 = 4x (slightly more than needed)
+        # Actual: 1/14 -> 1/7 -> 1/3.5 (we'll adjust final size to 1/4)
         self.upsampler = nn.Sequential(
             # Block 1: backbone_dim -> 512, 2x upsample
             UpsampleBlock(self.backbone_dim, 512),
             # Block 2: 512 -> 512, 2x upsample
-            UpsampleBlock(512, 512),
-            # Block 3: 512 -> 512, 2x upsample
             UpsampleBlock(512, 512),
         )
 
@@ -181,7 +179,7 @@ class ViTFeatureModel(nn.Module):
         Args:
             x: Input image tensor (B, 3, H, W)
             target_size: Optional (H, W) to resize output feature maps to.
-                        If None, outputs will be at ~1/2 resolution after upsampling.
+                        If None, outputs will be at ~1/4 resolution after upsampling.
 
         Returns:
             Dictionary containing:
@@ -197,10 +195,10 @@ class ViTFeatureModel(nn.Module):
         # 2. Upsample to higher resolution
         upsampled = self.upsampler(backbone_features)
 
-        # 3. Adjust to target size (1/2 of input resolution)
+        # 3. Adjust to target size (1/4 of input resolution)
         if target_size is None:
-            target_h = H // 2
-            target_w = W // 2
+            target_h = H // 4
+            target_w = W // 4
         else:
             target_h, target_w = target_size
 
@@ -213,7 +211,7 @@ class ViTFeatureModel(nn.Module):
                 align_corners=False,
             )
 
-        # 4. Shared trunk (B, 512, H/2, W/2) -> (B, 256, H/2, W/2)
+        # 4. Shared trunk (B, 512, H/4, W/4) -> (B, 256, H/4, W/4)
         trunk_features = self.trunk(upsampled)
 
         # 5. Detection heads
@@ -228,9 +226,9 @@ class ViTFeatureModel(nn.Module):
         descriptors = F.normalize(descriptors, p=2, dim=1)
 
         return {
-            "keypoints": keypoints,  # (B, 4, H/2, W/2)
-            "descriptors": descriptors,  # (B, 128, H/2, W/2)
-            "features": trunk_features,  # (B, 256, H/2, W/2)
+            "keypoints": keypoints,  # (B, 4, H/4, W/4)
+            "descriptors": descriptors,  # (B, 128, H/4, W/4)
+            "features": trunk_features,  # (B, 256, H/4, W/4)
         }
 
     def get_trainable_parameters(self):

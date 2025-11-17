@@ -10,6 +10,8 @@ from .homography_utils import (
     compute_feature_similarity,
     warp_image_with_homography,
 )
+from .training_sampler import TrainingSampler
+from .training_batch import TrainingBatchProcessor, collate_fn
 
 __all__ = [
     "HPatchesDataset",
@@ -18,4 +20,7 @@ __all__ = [
     "compute_valid_mask",
     "compute_feature_similarity",
     "warp_image_with_homography",
+    "TrainingSampler",
+    "TrainingBatchProcessor",
+    "collate_fn",
 ]
