@@ -211,8 +211,8 @@ class TrainableViTExtractor(BaseExtractor):
         selected_orientation = orientation[selected_y, selected_x]
 
         # Convert to original image coordinates
-        # Feature map is at 1/2 resolution
-        scale_factor = 2.0
+        # Feature map is at 1/4 resolution (model outputs at H/4, W/4)
+        scale_factor = 4.0
         scale_x_orig = w_orig / w_new
         scale_y_orig = h_orig / h_new
 
