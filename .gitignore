@@ -221,3 +221,5 @@ data/**/HPatches/
 experiments/outputs/*
 outputs/*
 **/*.png
+checkpoints/*
+!checkpoints/best.pt

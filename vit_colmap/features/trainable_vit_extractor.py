@@ -168,14 +168,14 @@ class TrainableViTExtractor(BaseExtractor):
         with torch.inference_mode():
             outputs = self.model(image_tensor)
 
-        keypoints_map = outputs["keypoints"].squeeze(0)  # (4, H/2, W/2)
-        descriptors_map = outputs["descriptors"].squeeze(0)  # (128, H/2, W/2)
+        keypoints_map = outputs["keypoints"].squeeze(0)  # (4, H/4, W/4)
+        descriptors_map = outputs["descriptors"].squeeze(0)  # (128, H/4, W/4)
 
         # Extract keypoints from score map
-        scores = keypoints_map[0]  # (H/2, W/2)
-        dx = keypoints_map[1]  # (H/2, W/2)
-        dy = keypoints_map[2]  # (H/2, W/2)
-        orientation = keypoints_map[3]  # (H/2, W/2)
+        scores = keypoints_map[0]  # (H/4, W/4)
+        dx = keypoints_map[1]  # (H/4, W/4)
+        dy = keypoints_map[2]  # (H/4, W/4)
+        orientation = keypoints_map[3]  # (H/4, W/4)
 
         # Apply sigmoid to scores to get probabilities
         scores = torch.sigmoid(scores)
