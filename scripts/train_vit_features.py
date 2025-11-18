@@ -365,6 +365,12 @@ def main():
         default=None,
         help="Experiment name (auto-generated if None)",
     )
+    parser.add_argument(
+        "--plot-interval",
+        type=int,
+        default=5,
+        help="Generate loss plots every N epochs (0 to disable, default: 5)",
+    )
 
     # Device
     parser.add_argument("--device", type=str, default=None, help="Device (cuda/cpu)")
@@ -429,6 +435,7 @@ def main():
         collate_fn,
     )
     from vit_colmap.losses import TotalLoss
+    from vit_colmap.utils.plot_training import TrainingLossPlotter
 
     # Initialize model
     log_message("Initializing model...", log_file)
@@ -537,6 +544,14 @@ def main():
         optimizer, T_max=args.epochs, eta_min=args.lr * 0.01
     )
 
+    # Initialize loss plotter
+    plotter = None
+    if args.plot_interval > 0:
+        plotter = TrainingLossPlotter(log_file=log_file)
+        log_message(
+            f"Loss plotting enabled (interval: {args.plot_interval} epochs)", log_file
+        )
+
     # Resume from checkpoint if specified
     start_epoch = 1
     global_step = 0
@@ -620,9 +635,33 @@ def main():
             model, optimizer, scheduler, epoch, global_step, train_losses, latest_path
         )
 
+        # Generate loss plots at specified intervals
+        if plotter is not None and epoch % args.plot_interval == 0:
+            log_message("Generating loss plots...", log_file)
+            try:
+                plotter.clear_cache()  # Force reload to include latest log data
+                plot_dir = args.log_dir / "plots"
+                plotter.plot_all(output_dir=plot_dir, show=False)
+                log_message(f"Loss plots saved to {plot_dir}", log_file)
+            except Exception as e:
+                log_message(f"Warning: Failed to generate plots: {e}", log_file)
+
     log_message("\nTraining complete!", log_file)
     log_message(f"Best validation loss: {best_val_loss:.4f}", log_file)
     log_message(f"Checkpoints saved to: {args.checkpoint_dir}", log_file)
+
+    # Generate final plots
+    if plotter is not None:
+        log_message("\nGenerating final loss plots...", log_file)
+        try:
+            plotter.clear_cache()
+            plot_dir = args.log_dir / "plots"
+            results = plotter.plot_all(output_dir=plot_dir, show=False)
+            for plot_name, plot_path in results.items():
+                if plot_path:
+                    log_message(f"  - {plot_name}: {plot_path}", log_file)
+        except Exception as e:
+            log_message(f"Warning: Failed to generate final plots: {e}", log_file)
 
 
 if __name__ == "__main__":
