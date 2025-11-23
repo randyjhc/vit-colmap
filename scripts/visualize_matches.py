@@ -9,9 +9,19 @@ This script:
    - Green lines for inlier matches
    - Red lines for outlier matches
 4. Displays comprehensive match statistics
+5. Optionally shows all keypoints with text labels displaying confidence scores
 
 Usage:
+    # Basic match visualization
     python scripts/visualize_matches.py --database database.db --image-dir images/ --image1 IMG_001.jpg --image2 IMG_002.jpg
+
+    # Show all keypoints with score labels (top 100 keypoints per image)
+    python scripts/visualize_matches.py --database database.db --image-dir images/ --image1 IMG_001.jpg --image2 IMG_002.jpg --show-all-keypoints --show-scores
+
+    # Show all keypoints with custom number of score labels
+    python scripts/visualize_matches.py --database database.db --image-dir images/ --image1 IMG_001.jpg --image2 IMG_002.jpg --show-all-keypoints --show-scores --max-score-labels 50
+
+    # Other options
     python scripts/visualize_matches.py --database database.db --image-dir images/ --image1 0 --image2 1 --max-matches 100
     python scripts/visualize_matches.py --database database.db --image-dir images/ --image1 IMG_001.jpg --image2 IMG_002.jpg --filter inliers
 """
@@ -79,6 +89,17 @@ def parse_args():
         "--show-all-keypoints",
         action="store_true",
         help="Show all keypoints, not just matched ones",
+    )
+    parser.add_argument(
+        "--show-scores",
+        action="store_true",
+        help="Show keypoint confidence scores as text labels (requires --show-all-keypoints)",
+    )
+    parser.add_argument(
+        "--max-score-labels",
+        type=int,
+        default=100,
+        help="Maximum number of score labels to display per image (default: 100, shows top-scoring keypoints)",
     )
     parser.add_argument(
         "--inlier-color",
@@ -277,6 +298,8 @@ def visualize_matches(
     image1_name: str,
     image2_name: str,
     show_all_keypoints: bool = False,
+    show_scores: bool = False,
+    max_score_labels: int = 100,
     inlier_color: str = "green",
     outlier_color: str = "red",
     keypoint_size: int = 3,
@@ -290,13 +313,15 @@ def visualize_matches(
     Args:
         img1_path: Path to first image
         img2_path: Path to second image
-        kpts1: Keypoints in first image (Nx2 array)
-        kpts2: Keypoints in second image (Mx2 array)
+        kpts1: Keypoints in first image (Nx6 array: x, y, scale, orientation, score, unused)
+        kpts2: Keypoints in second image (Mx6 array: x, y, scale, orientation, score, unused)
         matches: Match indices (Kx2 array)
         inlier_mask: Boolean mask indicating inliers (K-length array)
         image1_name: Name of first image
         image2_name: Name of second image
         show_all_keypoints: Show all keypoints, not just matched ones
+        show_scores: When True with show_all_keypoints, show score labels for top keypoints
+        max_score_labels: Maximum number of score labels to display per image
         inlier_color: Color for inlier matches
         outlier_color: Color for outlier matches
         keypoint_size: Size of keypoint markers
@@ -338,6 +363,7 @@ def visualize_matches(
 
     # Draw all keypoints if requested
     if show_all_keypoints:
+        # Draw all keypoints as cyan dots with fixed alpha (standard style)
         ax.plot(
             kpts1_xy[:, 0], kpts1_xy[:, 1], "c.", markersize=keypoint_size, alpha=0.3
         )
@@ -348,6 +374,62 @@ def visualize_matches(
             markersize=keypoint_size,
             alpha=0.3,
         )
+
+        # Add score labels for top-N keypoints if requested
+        if show_scores and kpts1.shape[1] >= 6 and kpts2.shape[1] >= 6:
+            # Extract scores (5th column, index 4) from 6-column format
+            # Format: (x, y, scale, orientation, score, unused)
+            scores1 = kpts1[:, 4]
+            scores2 = kpts2[:, 4]
+
+            # Select top-N keypoints by score for labeling
+            n_labels1 = min(max_score_labels, len(scores1))
+            n_labels2 = min(max_score_labels, len(scores2))
+
+            top_indices1 = np.argsort(scores1)[-n_labels1:]  # Top N highest scores
+            top_indices2 = np.argsort(scores2)[-n_labels2:]
+
+            # Add text annotations for top scoring keypoints in image 1
+            for idx in top_indices1:
+                score_text = f"{scores1[idx]:.2f}"
+                ax.text(
+                    kpts1_xy[idx, 0] + 3,  # Offset to the right
+                    kpts1_xy[idx, 1] - 3,  # Offset upward
+                    score_text,
+                    fontsize=6,
+                    color="white",
+                    weight="bold",
+                    ha="left",
+                    va="bottom",
+                    bbox=dict(
+                        boxstyle="round,pad=0.2",
+                        facecolor="black",
+                        alpha=0.6,
+                        edgecolor="none",
+                    ),
+                )
+
+            # Add text annotations for top scoring keypoints in image 2
+            for idx in top_indices2:
+                score_text = f"{scores2[idx]:.2f}"
+                ax.text(
+                    kpts2_xy[idx, 0]
+                    + w1
+                    + 3,  # Offset to the right (account for image shift)
+                    kpts2_xy[idx, 1] - 3,  # Offset upward
+                    score_text,
+                    fontsize=6,
+                    color="white",
+                    weight="bold",
+                    ha="left",
+                    va="bottom",
+                    bbox=dict(
+                        boxstyle="round,pad=0.2",
+                        facecolor="black",
+                        alpha=0.6,
+                        edgecolor="none",
+                    ),
+                )
 
     # Statistics
     num_inliers = inlier_mask.sum()
@@ -581,6 +663,8 @@ def main():
             image_name1,
             image_name2,
             show_all_keypoints=args.show_all_keypoints,
+            show_scores=args.show_scores,
+            max_score_labels=args.max_score_labels,
             inlier_color=args.inlier_color,
             outlier_color=args.outlier_color,
             keypoint_size=args.keypoint_size,
