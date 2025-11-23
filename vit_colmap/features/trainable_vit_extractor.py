@@ -146,9 +146,9 @@ class TrainableViTExtractor(BaseExtractor):
 
         Returns:
             keypoints: (N, 6) float32 array of (x, y, scale, orientation, score, unused)
-                       Maps to COLMAP format (x, y, a11, a12, a21, a22) where score is stored in a21
+                       Maps to COLMAP format (x, y, a11, a12, a21, a22) where score is stored in a21 (column 4)
+                       Note: Scores are accessible via keypoints[:, 4]
             descriptors: (N, 128) uint8 array of descriptors
-            scores: (N,) float32 array of confidence scores [0, 1]
         """
         # Convert BGR to RGB
         image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
@@ -196,7 +196,6 @@ class TrainableViTExtractor(BaseExtractor):
             return (
                 np.zeros((0, 6), dtype=np.float32),
                 np.zeros((0, self.descriptor_dim), dtype=np.uint8),
-                np.zeros((0,), dtype=np.float32),
             )
 
         # Select top-K by score
@@ -260,7 +259,6 @@ class TrainableViTExtractor(BaseExtractor):
         # Convert to numpy
         keypoints_np = keypoints.cpu().numpy().astype(np.float32)
         descriptors_float = descriptors.cpu().numpy()
-        scores_np = selected_scores.cpu().numpy().astype(np.float32)
 
         # Convert normalized descriptors to uint8 [0, 255]
         # Descriptors are already normalized, map from [-1, 1] to [0, 255]
@@ -268,7 +266,7 @@ class TrainableViTExtractor(BaseExtractor):
             ((descriptors_float + 1.0) * 127.5).clip(0, 255).astype(np.uint8)
         )
 
-        return keypoints_np, descriptors_uint8, scores_np
+        return keypoints_np, descriptors_uint8
 
     def extract(
         self,
@@ -358,13 +356,16 @@ class TrainableViTExtractor(BaseExtractor):
 
             # Extract features
             try:
-                keypoints, descriptors, scores = self._run_inference(img)
+                keypoints, descriptors = self._run_inference(img)
 
                 print(f"  Extracted {len(keypoints)} keypoints")
                 print(f"  Descriptor shape: {descriptors.shape}")
-                print(f"  Score range: [{scores.min():.3f}, {scores.max():.3f}]")
 
-                if len(keypoints) == 0:
+                # Extract scores from keypoints array for logging
+                if len(keypoints) > 0:
+                    scores = keypoints[:, 4]
+                    print(f"  Score range: [{scores.min():.3f}, {scores.max():.3f}]")
+                else:
                     print("  Warning: No keypoints extracted")
                     continue
 
