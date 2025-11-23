@@ -68,6 +68,19 @@ def save_checkpoint(
     torch.save(checkpoint, checkpoint_path)
 
 
+def diagnose_scheduler(scheduler, epoch, log_file):
+    """Log detailed scheduler state for debugging."""
+    log_message("Scheduler Diagnostics:", log_file)
+    log_message(f"  Type: {type(scheduler).__name__}", log_file)
+    log_message(f"  last_epoch: {scheduler.last_epoch}", log_file)
+    log_message(f"  Current LR: {scheduler.get_last_lr()}", log_file)
+    log_message(f"  Base LRs: {scheduler.base_lrs}", log_file)
+    if hasattr(scheduler, "T_max"):
+        log_message(f"  T_max: {scheduler.T_max}", log_file)
+    if hasattr(scheduler, "eta_min"):
+        log_message(f"  eta_min: {scheduler.eta_min}", log_file)
+
+
 def load_checkpoint(checkpoint_path: Path, model, optimizer=None, scheduler=None):
     """Load training checkpoint."""
     checkpoint = torch.load(checkpoint_path, map_location="cpu")
@@ -76,10 +89,18 @@ def load_checkpoint(checkpoint_path: Path, model, optimizer=None, scheduler=None
 
     if optimizer is not None and "optimizer_state_dict" in checkpoint:
         optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+        print("✓ Optimizer state loaded")
 
     if scheduler is not None and "scheduler_state_dict" in checkpoint:
         if checkpoint["scheduler_state_dict"] is not None:
-            scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+            try:
+                scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+                print(f"✓ Scheduler state loaded (last_epoch: {scheduler.last_epoch})")
+            except Exception as e:
+                print(f"⚠️  Warning: Could not load scheduler state: {e}")
+                print("    Scheduler will be manually synced")
+        else:
+            print("⚠️  Warning: No scheduler state in checkpoint")
 
     return checkpoint["epoch"], checkpoint["step"], checkpoint.get("losses", {})
 
@@ -562,8 +583,26 @@ def main():
         start_epoch, global_step, _ = load_checkpoint(
             args.resume, model, optimizer, scheduler
         )
+
+        # CRITICAL FIX: Ensure scheduler's last_epoch matches the resumed epoch
+        # This prevents the cosine curve from restarting and causing LR oscillation
+        if scheduler.last_epoch != start_epoch:
+            log_message(
+                f"⚠️  Scheduler last_epoch ({scheduler.last_epoch}) != checkpoint epoch ({start_epoch})",
+                log_file,
+            )
+            log_message(
+                f"   Manually setting scheduler.last_epoch = {start_epoch}", log_file
+            )
+            scheduler.last_epoch = start_epoch
+
         start_epoch += 1
         log_message(f"Resumed from epoch {start_epoch - 1}", log_file)
+        log_message(f"Scheduler last_epoch: {scheduler.last_epoch}", log_file)
+        log_message(f"Current LR: {scheduler.get_last_lr()[0]:.6f}", log_file)
+
+        # Run scheduler diagnostics to verify state
+        diagnose_scheduler(scheduler, start_epoch - 1, log_file)
 
     # Training loop
     log_message("Starting training...", log_file)
@@ -572,6 +611,7 @@ def main():
         log_message(f"\n{'='*60}", log_file)
         log_message(f"Epoch {epoch}/{args.epochs}", log_file)
         log_message(f"Learning rate: {scheduler.get_last_lr()[0]:.6f}", log_file)
+        log_message(f"Scheduler last_epoch: {scheduler.last_epoch}", log_file)
         log_message(f"{'='*60}", log_file)
 
         # Train
@@ -602,7 +642,18 @@ def main():
         )
 
         # Update scheduler
+        old_lr = scheduler.get_last_lr()[0]
         scheduler.step()
+        new_lr = scheduler.get_last_lr()[0]
+
+        # Detect abnormal LR changes (should only decrease or stay similar)
+        lr_ratio = new_lr / old_lr if old_lr > 0 else 1.0
+        if lr_ratio > 1.5:  # LR increased by more than 50%
+            log_message(
+                f"⚠️  WARNING: Learning rate jumped from {old_lr:.6f} to {new_lr:.6f} (ratio: {lr_ratio:.2f})",
+                log_file,
+            )
+            log_message("   This suggests a scheduler bug!", log_file)
 
         # Save checkpoint
         if epoch % args.save_interval == 0:

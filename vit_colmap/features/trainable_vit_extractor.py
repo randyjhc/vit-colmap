@@ -145,7 +145,9 @@ class TrainableViTExtractor(BaseExtractor):
             image_bgr: Input image in BGR format (OpenCV format)
 
         Returns:
-            keypoints: (N, 2) float32 array of (x, y) coordinates
+            keypoints: (N, 6) float32 array of (x, y, scale, orientation, score, unused)
+                       Maps to COLMAP format (x, y, a11, a12, a21, a22) where score is stored in a21 (column 4)
+                       Note: Scores are accessible via keypoints[:, 4]
             descriptors: (N, 128) uint8 array of descriptors
         """
         # Convert BGR to RGB
@@ -191,8 +193,9 @@ class TrainableViTExtractor(BaseExtractor):
 
         if len(valid_coords) == 0:
             # No keypoints found, return empty arrays
-            return np.zeros((0, 4), dtype=np.float32), np.zeros(
-                (0, self.descriptor_dim), dtype=np.uint8
+            return (
+                np.zeros((0, 6), dtype=np.float32),
+                np.zeros((0, self.descriptor_dim), dtype=np.uint8),
             )
 
         # Select top-K by score
@@ -201,6 +204,7 @@ class TrainableViTExtractor(BaseExtractor):
         top_k_indices = torch.topk(valid_scores, k).indices
 
         selected_coords = valid_coords[top_k_indices]  # (K, 2) - (y, x)
+        selected_scores = valid_scores[top_k_indices]  # (K,) - confidence scores
 
         # Extract sub-pixel offsets for selected keypoints
         selected_y = selected_coords[:, 0]
@@ -231,10 +235,23 @@ class TrainableViTExtractor(BaseExtractor):
         # Create dummy scale (1.0 for all keypoints)
         keypoints_scale = torch.ones_like(keypoints_x)
 
-        # Stack keypoints with scale and orientation: (x, y, scale, orientation)
+        # Create unused column (0.0 for all keypoints)
+        keypoints_unused = torch.zeros_like(keypoints_x)
+
+        # Stack keypoints in 6-column COLMAP-compatible format: (x, y, a11, a12, a21, a22)
+        # We use: x, y, scale, orientation, score, unused
+        # Maps to: x, y, a11, a12, a21, a22 where score is stored in a21 column
         keypoints = torch.stack(
-            [keypoints_x, keypoints_y, keypoints_scale, selected_orientation], dim=1
-        )  # (K, 4)
+            [
+                keypoints_x,
+                keypoints_y,
+                keypoints_scale,
+                selected_orientation,
+                selected_scores,
+                keypoints_unused,
+            ],
+            dim=1,
+        )  # (K, 6)
 
         # Extract descriptors at keypoint locations
         descriptors = descriptors_map[:, selected_y, selected_x].t()  # (K, 128)
@@ -344,7 +361,11 @@ class TrainableViTExtractor(BaseExtractor):
                 print(f"  Extracted {len(keypoints)} keypoints")
                 print(f"  Descriptor shape: {descriptors.shape}")
 
-                if len(keypoints) == 0:
+                # Extract scores from keypoints array for logging
+                if len(keypoints) > 0:
+                    scores = keypoints[:, 4]
+                    print(f"  Score range: [{scores.min():.3f}, {scores.max():.3f}]")
+                else:
                     print("  Warning: No keypoints extracted")
                     continue
 
