@@ -11,7 +11,11 @@ from .homography_utils import (
     warp_image_with_homography,
 )
 from .training_sampler import TrainingSampler
-from .training_batch import TrainingBatchProcessor, collate_fn
+from .training_batch import (
+    TrainingBatchProcessor,
+    collate_fn,
+    EnhancedTrainingBatchProcessor,
+)
 
 __all__ = [
     "HPatchesDataset",
@@ -23,4 +27,5 @@ __all__ = [
     "TrainingSampler",
     "TrainingBatchProcessor",
     "collate_fn",
+    "EnhancedTrainingBatchProcessor",
 ]

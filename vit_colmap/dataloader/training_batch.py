@@ -341,3 +341,301 @@ def collate_fn(batch):
         else:
             collated[key] = [item[key] for item in batch]
     return collated
+
+
+class EnhancedTrainingBatchProcessor:
+    """
+    Enhanced batch processor that provides data for all loss components.
+
+    Modifications from original:
+    1. Runs model on both images (not just image1)
+    2. Computes fundamental matrix from homography
+    3. Provides warped coordinates for image2
+    """
+
+    def __init__(self, model, sampler):
+        self.model = model
+        self.sampler = sampler
+
+    def process_batch(
+        self, batch: Dict[str, torch.Tensor]
+    ) -> Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]:
+        """
+        Process batch to prepare data for training.
+
+        Args:
+            batch: Dictionary containing:
+                - image1: (B, 3, H, W) first image
+                - image2: (B, 3, H, W) second image (warped)
+                - homography: (B, 3, 3) homography from image1 to image2
+                - rotation_angle: (B,) rotation angle
+
+        Returns:
+            outputs: Dictionary for model outputs
+            targets: Dictionary for loss targets
+        """
+        # ===== MODIFIED: Run model on BOTH images =====
+        with torch.inference_mode():
+            outputs1 = self.model(batch["image1"])
+            outputs2 = self.model(batch["image2"])
+
+        # Extract feature maps
+        keypoints_map1 = outputs1["keypoints"]  # (B, 4, H, W)
+        descriptors_map1 = outputs1["descriptors"]  # (B, D, H, W)
+
+        keypoints_map2 = outputs2["keypoints"]
+        descriptors_map2 = outputs2["descriptors"]
+
+        B, _, H, W = keypoints_map1.shape
+        invariant_coords, score_gt = self.sampler.sample_invariant_points(
+            batch["homography"], (H, W)
+        )
+
+        # Warp coordinates to image2
+        invariant_coords_warped = self._warp_coordinates(
+            invariant_coords, batch["homography"]
+        )
+
+        # Sample features at invariant points
+        sampled_z1 = self._sample_descriptors_at_coords(
+            descriptors_map1, invariant_coords
+        )
+        sampled_z2 = self._sample_descriptors_at_coords(
+            descriptors_map2, invariant_coords_warped
+        )
+
+        # Sample orientations
+        sampled_orientations1 = self._sample_at_coords(
+            keypoints_map1[:, 3:4], invariant_coords
+        ).squeeze(1)
+        sampled_orientations2 = self._sample_at_coords(
+            keypoints_map2[:, 3:4], invariant_coords_warped
+        ).squeeze(1)
+
+        # Sample negative descriptors (same as before)
+        negatives = self.sampler.sample_negatives(
+            descriptors_map1,
+            invariant_coords,
+            keypoints_map1[:, 0:1],
+        )
+
+        # ===== Compute fundamental matrix =====
+        fundamental_matrix = self._homography_to_fundamental(
+            batch["homography"],
+            image_size=(H * 4, W * 4),  # Original image size (before downsampling)
+        )
+
+        # ===== Prepare outputs =====
+        outputs = {
+            "score_logits": keypoints_map1[:, 0:1],  # (B, 1, H, W)
+            "score_logits_2": keypoints_map2[:, 0:1],  # (B, 1, H, W)
+            "orientations1": sampled_orientations1,  # (B, K)
+            "orientations2": sampled_orientations2,  # (B, K)
+            "z1": sampled_z1,  # (B, K, D)
+            "z2": sampled_z2,  # (B, K, D)
+            "negatives": negatives,  # (B, K, N, D)
+        }
+
+        # ===== Prepare targets =====
+        targets = {
+            "score_gt": score_gt,  # (B, 1, H, W)
+            "rotation_angle": batch["rotation_angle"],  # (B,)
+            "homography": batch["homography"],  # (B, 3, 3)
+            "fundamental_matrix": fundamental_matrix,  # (B, 3, 3)
+            "invariant_coords": invariant_coords,  # (B, K, 2)
+            "invariant_coords_2": invariant_coords_warped,  # (B, K, 2)
+        }
+
+        return outputs, targets
+
+    def _warp_coordinates(
+        self, coords: torch.Tensor, homography: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        Warp coordinates using homography.
+
+        Args:
+            coords: (B, K, 2) coordinates (x, y)
+            homography: (B, 3, 3) homography matrix
+
+        Returns:
+            warped_coords: (B, K, 2) warped coordinates
+        """
+        B, K, _ = coords.shape
+
+        # Convert to homogeneous coordinates
+        ones = torch.ones(B, K, 1, device=coords.device)
+        coords_h = torch.cat([coords, ones], dim=-1)  # (B, K, 3)
+
+        # Apply homography: H @ [x, y, 1]^T
+        coords_warped_h = torch.einsum("bij,bkj->bki", homography, coords_h)
+
+        # Normalize by z coordinate
+        coords_warped = coords_warped_h[..., :2] / (coords_warped_h[..., 2:3] + 1e-8)
+
+        return coords_warped
+
+    def _homography_to_fundamental(
+        self,
+        H: torch.Tensor,
+        image_size: Tuple[int, int],
+        intrinsic_scale: float = 1.0,
+    ) -> torch.Tensor:
+        """
+        Approximate fundamental matrix from homography.
+
+        For planar scenes: F = K^-T [t]_x H K^-1
+        We use a simplified approximation suitable for training.
+
+        Args:
+            H: (B, 3, 3) homography matrix
+            image_size: (height, width) of images
+            intrinsic_scale: Scale factor for intrinsics
+
+        Returns:
+            F: (B, 3, 3) fundamental matrix
+        """
+        B = H.shape[0]
+        device = H.device
+        h, w = image_size
+
+        # Simple camera intrinsics (assume focal length = max(w, h))
+        f = max(h, w) * intrinsic_scale
+        cx, cy = w / 2, h / 2
+
+        K = (
+            torch.tensor(
+                [[f, 0, cx], [0, f, cy], [0, 0, 1]], dtype=H.dtype, device=device
+            )
+            .unsqueeze(0)
+            .expand(B, -1, -1)
+        )
+
+        K_inv = torch.inverse(K)
+
+        # Decompose homography: H = R + t*n^T
+        # For small motions, we approximate the epipole direction
+        # Simplified: Use the translation part of H
+
+        # Extract translation direction (rightmost column of H after normalization)
+        t = H[:, :, 2].unsqueeze(-1)  # (B, 3, 1)
+
+        # Create skew-symmetric matrix [t]_x
+        tx = self._skew_symmetric(t.squeeze(-1))  # (B, 3, 3)
+
+        # Fundamental matrix: F = K^-T [t]_x H K^-1
+        F = K_inv.transpose(-2, -1) @ tx @ H @ K_inv
+
+        # Normalize: Make F have unit Frobenius norm
+        F_norm = torch.norm(F, dim=(-2, -1), keepdim=True) + 1e-8
+        F = F / F_norm
+
+        # Enforce rank-2 constraint (optional, can be skipped for efficiency)
+        # F = self._enforce_rank2(F)
+
+        return F
+
+    def _skew_symmetric(self, v: torch.Tensor) -> torch.Tensor:
+        """
+        Create skew-symmetric matrix from vector.
+
+        [v]_x = [[0, -v3, v2],
+                 [v3, 0, -v1],
+                 [-v2, v1, 0]]
+
+        Args:
+            v: (B, 3) vector
+
+        Returns:
+            (B, 3, 3) skew-symmetric matrix
+        """
+        B = v.shape[0]
+        device = v.device
+
+        zeros = torch.zeros(B, device=device)
+
+        skew = torch.stack(
+            [
+                torch.stack([zeros, -v[:, 2], v[:, 1]], dim=-1),
+                torch.stack([v[:, 2], zeros, -v[:, 0]], dim=-1),
+                torch.stack([-v[:, 1], v[:, 0], zeros], dim=-1),
+            ],
+            dim=1,
+        )
+
+        return skew
+
+    def _enforce_rank2(self, F: torch.Tensor) -> torch.Tensor:
+        """
+        Enforce rank-2 constraint on fundamental matrix using SVD.
+
+        Args:
+            F: (B, 3, 3) fundamental matrix
+
+        Returns:
+            F_rank2: (B, 3, 3) rank-2 fundamental matrix
+        """
+        # SVD decomposition
+        U, S, Vh = torch.linalg.svd(F)
+
+        # Set smallest singular value to zero
+        S[:, 2] = 0
+
+        # Reconstruct
+        F_rank2 = U @ torch.diag_embed(S) @ Vh
+
+        return F_rank2
+
+    def _sample_descriptors_at_coords(
+        self,
+        descriptor_map: torch.Tensor,
+        coords: torch.Tensor,
+    ) -> torch.Tensor:
+        """Sample descriptors at specified coordinates."""
+        B, D, H, W = descriptor_map.shape
+
+        # Normalize coordinates to [-1, 1]
+        grid = coords.clone()
+        grid[..., 0] = (grid[..., 0] / (W - 1)) * 2 - 1
+        grid[..., 1] = (grid[..., 1] / (H - 1)) * 2 - 1
+
+        # Add batch dimension for grid_sample
+        grid = grid.unsqueeze(2)  # (B, K, 1, 2)
+
+        # Sample
+        sampled = F.grid_sample(
+            descriptor_map,
+            grid,
+            mode="bilinear",
+            align_corners=False,
+        )
+
+        # Reshape to (B, K, D)
+        sampled = sampled.squeeze(-1).transpose(1, 2)
+
+        return sampled
+
+    def _sample_at_coords(
+        self,
+        feature_map: torch.Tensor,
+        coords: torch.Tensor,
+    ) -> torch.Tensor:
+        """Sample arbitrary feature map at coordinates."""
+        B, C, H, W = feature_map.shape
+
+        grid = coords.clone()
+        grid[..., 0] = (grid[..., 0] / (W - 1)) * 2 - 1
+        grid[..., 1] = (grid[..., 1] / (H - 1)) * 2 - 1
+
+        grid = grid.unsqueeze(2)
+
+        sampled = F.grid_sample(
+            feature_map,
+            grid,
+            mode="bilinear",
+            align_corners=False,
+        )
+
+        sampled = sampled.squeeze(-1).transpose(1, 2)
+
+        return sampled

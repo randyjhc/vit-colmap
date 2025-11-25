@@ -127,6 +127,10 @@ def train_one_epoch(
         "detector": 0.0,
         "rotation": 0.0,
         "descriptor": 0.0,
+        "repeatability": 0.0,
+        "match_count": 0.0,
+        "epipolar": 0.0,
+        "peakness": 0.0,
     }
     num_batches = 0
 
@@ -194,6 +198,8 @@ def train_one_epoch(
                     "det": f"{losses['detector'].item():.4f}",
                     "rot": f"{losses['rotation'].item():.4f}",
                     "desc": f"{losses['descriptor'].item():.4f}",
+                    "rep": f"{losses['repeatability'].item():.4f}",
+                    "match": f"{losses['match_count'].item():.4f}",
                 }
             )
 
@@ -333,6 +339,10 @@ def main():
         "--lambda-desc", type=float, default=1.0, help="Descriptor loss weight"
     )
     parser.add_argument("--margin", type=float, default=0.5, help="Triplet loss margin")
+    parser.add_argument("--lambda-repeatability", type=float, default=0.5)
+    parser.add_argument("--lambda-match-count", type=float, default=0.3)
+    parser.add_argument("--lambda-epipolar", type=float, default=0.2)
+    parser.add_argument("--lambda-peakness", type=float, default=0.1)
 
     # Sampler arguments
     parser.add_argument(
@@ -452,7 +462,7 @@ def main():
     from vit_colmap.dataloader import (
         HPatchesDataset,
         TrainingSampler,
-        TrainingBatchProcessor,
+        EnhancedTrainingBatchProcessor,
         collate_fn,
     )
     from vit_colmap.losses import TotalLoss
@@ -542,7 +552,7 @@ def main():
         patch_size=model.patch_size,
     )
 
-    processor = TrainingBatchProcessor(model, sampler)
+    processor = EnhancedTrainingBatchProcessor(model, sampler)
 
     # Initialize loss function
     loss_fn = TotalLoss(
@@ -550,6 +560,10 @@ def main():
         lambda_rot=args.lambda_rot,
         lambda_desc=args.lambda_desc,
         margin=args.margin,
+        lambda_repeatability=0.5,
+        lambda_match_count=0.3,
+        lambda_epipolar=0.2,
+        lambda_peakness=0.1,
     )
 
     # Initialize optimizer
