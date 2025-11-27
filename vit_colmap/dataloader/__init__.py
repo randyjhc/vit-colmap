@@ -12,6 +12,13 @@ from .homography_utils import (
 )
 from .training_sampler import TrainingSampler
 from .training_batch import TrainingBatchProcessor, collate_fn
+from .synthetic_homography import (
+    SyntheticHomographyConfig,
+    generate_random_homography,
+    create_synthetic_pair,
+    warp_image_cv2,
+    compose_homographies,
+)
 
 __all__ = [
     "HPatchesDataset",
@@ -23,4 +30,9 @@ __all__ = [
     "TrainingSampler",
     "TrainingBatchProcessor",
     "collate_fn",
+    "SyntheticHomographyConfig",
+    "generate_random_homography",
+    "create_synthetic_pair",
+    "warp_image_cv2",
+    "compose_homographies",
 ]

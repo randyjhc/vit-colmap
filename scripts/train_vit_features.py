@@ -334,6 +334,53 @@ def main():
     )
     parser.add_argument("--margin", type=float, default=0.5, help="Triplet loss margin")
 
+    # Dataset augmentation arguments
+    parser.add_argument(
+        "--pair-mode",
+        type=str,
+        default="reference_only",
+        choices=["reference_only", "consecutive", "all_pairs"],
+        help="Image pairing strategy",
+    )
+    parser.add_argument(
+        "--use-synthetic-aug",
+        action="store_true",
+        default=False,
+        help="Enable synthetic homography augmentation",
+    )
+    parser.add_argument(
+        "--synthetic-ratio",
+        type=float,
+        default=0.5,
+        help="Ratio of synthetic samples (0.0-1.0)",
+    )
+    parser.add_argument(
+        "--synthetic-rotation-range",
+        type=float,
+        default=30.0,
+        help="Maximum rotation in degrees for synthetic augmentation",
+    )
+    parser.add_argument(
+        "--synthetic-scale-range",
+        type=float,
+        nargs=2,
+        default=[0.8, 1.2],
+        help="Scale range (min max) for synthetic augmentation",
+    )
+    parser.add_argument(
+        "--synthetic-perspective-range",
+        type=float,
+        default=0.0002,
+        help="Perspective distortion range for synthetic augmentation",
+    )
+    parser.add_argument(
+        "--synthetic-translation-range",
+        type=float,
+        nargs=2,
+        default=[0.1, 0.1],
+        help="Translation range (tx_ratio ty_ratio) for synthetic augmentation",
+    )
+
     # Sampler arguments
     parser.add_argument(
         "--top-k", type=int, default=512, help="Number of invariant points"
@@ -346,6 +393,31 @@ def main():
     )
     parser.add_argument(
         "--num-hard-negatives", type=int, default=5, help="Number of hard negatives"
+    )
+    parser.add_argument(
+        "--selection-mode",
+        type=str,
+        default="top_k",
+        choices=["top_k", "threshold", "hybrid"],
+        help="Invariant point selection strategy",
+    )
+    parser.add_argument(
+        "--similarity-threshold",
+        type=float,
+        default=0.7,
+        help="Similarity threshold for threshold-based selection",
+    )
+    parser.add_argument(
+        "--min-invariant-points",
+        type=int,
+        default=100,
+        help="Minimum number of invariant points (for threshold mode)",
+    )
+    parser.add_argument(
+        "--max-invariant-points",
+        type=int,
+        default=2048,
+        help="Maximum number of invariant points (for threshold mode)",
     )
 
     # Model arguments
@@ -455,6 +527,7 @@ def main():
         TrainingBatchProcessor,
         collate_fn,
     )
+    from vit_colmap.dataloader.synthetic_homography import SyntheticHomographyConfig
     from vit_colmap.losses import TotalLoss
     from vit_colmap.utils.plot_training import TrainingLossPlotter
 
@@ -493,11 +566,28 @@ def main():
     # Initialize dataset
     log_message(f"Loading HPatches dataset from {args.data_root}...", log_file)
 
+    # Create synthetic augmentation config
+    synthetic_config = None
+    if args.use_synthetic_aug:
+        synthetic_config = SyntheticHomographyConfig(
+            rotation_range=args.synthetic_rotation_range,
+            scale_range=tuple(args.synthetic_scale_range),
+            perspective_range=args.synthetic_perspective_range,
+            translation_range=tuple(args.synthetic_translation_range),
+        )
+        log_message(
+            f"Synthetic augmentation enabled: {synthetic_config.to_dict()}", log_file
+        )
+
     full_dataset = HPatchesDataset(
         root_dir=args.data_root,
         split="all",
         target_size=tuple(args.target_size),
         patch_size=model.patch_size,
+        pair_mode=args.pair_mode,
+        use_synthetic_aug=args.use_synthetic_aug,
+        synthetic_ratio=args.synthetic_ratio,
+        synthetic_config=synthetic_config,
     )
 
     # Split into train/val
@@ -540,7 +630,20 @@ def main():
         num_in_image_negatives=args.num_negatives,
         num_hard_negatives=args.num_hard_negatives,
         patch_size=model.patch_size,
+        selection_mode=args.selection_mode,
+        similarity_threshold=args.similarity_threshold,
+        min_invariant_points=args.min_invariant_points,
+        max_invariant_points=args.max_invariant_points,
     )
+
+    log_message("TrainingSampler configuration:", log_file)
+    log_message(f"  Selection mode: {args.selection_mode}", log_file)
+    if args.selection_mode in ["threshold", "hybrid"]:
+        log_message(f"  Similarity threshold: {args.similarity_threshold}", log_file)
+        log_message(f"  Min points: {args.min_invariant_points}", log_file)
+        log_message(f"  Max points: {args.max_invariant_points}", log_file)
+    if args.selection_mode in ["top_k", "hybrid"]:
+        log_message(f"  Top K: {args.top_k}", log_file)
 
     processor = TrainingBatchProcessor(model, sampler)
 

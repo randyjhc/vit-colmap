@@ -299,7 +299,7 @@ class TrainableViTExtractor(BaseExtractor):
         print(f"{'='*60}\n")
 
         # Get list of image files
-        image_extensions = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif"}
+        image_extensions = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif", ".ppm"}
         image_files = sorted(
             [f for f in image_dir.iterdir() if f.suffix.lower() in image_extensions]
         )
@@ -328,6 +328,14 @@ class TrainableViTExtractor(BaseExtractor):
             elif camera_model == "PINHOLE":
                 f = max(width, height)
                 camera_params = [f, f, width / 2.0, height / 2.0]
+            elif camera_model == "SIMPLE_RADIAL":
+                # SIMPLE_RADIAL: f, cx, cy, k (radial distortion)
+                f = max(width, height)
+                camera_params = [f, width / 2.0, height / 2.0, 0.0]
+            elif camera_model == "RADIAL":
+                # RADIAL: f, cx, cy, k1, k2 (radial distortion)
+                f = max(width, height)
+                camera_params = [f, width / 2.0, height / 2.0, 0.0, 0.0]
             else:
                 raise ValueError(f"Unsupported camera model: {camera_model}")
 
