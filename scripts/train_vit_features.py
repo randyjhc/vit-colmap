@@ -125,7 +125,8 @@ def train_one_epoch(
     epoch_losses = {
         "total": 0.0,
         "detector": 0.0,
-        "rotation": 0.0,
+        "detector_score": 0.0,
+        "detector_orient": 0.0,
         "descriptor": 0.0,
     }
     num_batches = 0
@@ -192,7 +193,6 @@ def train_one_epoch(
                 {
                     "loss": f"{losses['total'].item():.4f}",
                     "det": f"{losses['detector'].item():.4f}",
-                    "rot": f"{losses['rotation'].item():.4f}",
                     "desc": f"{losses['descriptor'].item():.4f}",
                 }
             )
@@ -229,8 +229,8 @@ def train_one_epoch(
     log_message(
         f"Epoch {epoch} completed in {epoch_time:.1f}s | "
         f"Avg Loss: {epoch_losses['total']:.4f} | "
-        f"Det: {epoch_losses['detector']:.4f} | "
-        f"Rot: {epoch_losses['rotation']:.4f} | "
+        f"Det: {epoch_losses['detector']:.4f} "
+        f"(Score: {epoch_losses['detector_score']:.4f}, Orient: {epoch_losses['detector_orient']:.4f}) | "
         f"Desc: {epoch_losses['descriptor']:.4f}",
         log_file,
     )
@@ -245,7 +245,8 @@ def validate(model, dataloader, processor, loss_fn, device, log_file, use_amp=Fa
     val_losses = {
         "total": 0.0,
         "detector": 0.0,
-        "rotation": 0.0,
+        "detector_score": 0.0,
+        "detector_orient": 0.0,
         "descriptor": 0.0,
     }
     num_batches = 0
@@ -282,8 +283,8 @@ def validate(model, dataloader, processor, loss_fn, device, log_file, use_amp=Fa
 
     log_message(
         f"Validation | Loss: {val_losses['total']:.4f} | "
-        f"Det: {val_losses['detector']:.4f} | "
-        f"Rot: {val_losses['rotation']:.4f} | "
+        f"Det: {val_losses['detector']:.4f} "
+        f"(Score: {val_losses['detector_score']:.4f}, Orient: {val_losses['detector_orient']:.4f}) | "
         f"Desc: {val_losses['descriptor']:.4f}",
         log_file,
     )
@@ -324,15 +325,21 @@ def main():
 
     # Loss weights
     parser.add_argument(
-        "--lambda-det", type=float, default=1.0, help="Detector loss weight"
-    )
-    parser.add_argument(
-        "--lambda-rot", type=float, default=0.5, help="Rotation loss weight"
+        "--lambda-det",
+        type=float,
+        default=1.0,
+        help="Detector loss weight (includes orientation)",
     )
     parser.add_argument(
         "--lambda-desc", type=float, default=1.0, help="Descriptor loss weight"
     )
     parser.add_argument("--margin", type=float, default=0.5, help="Triplet loss margin")
+    parser.add_argument(
+        "--alpha-orient",
+        type=float,
+        default=0.5,
+        help="Orientation loss weight within detector loss",
+    )
 
     # Dataset augmentation arguments
     parser.add_argument(
@@ -650,9 +657,9 @@ def main():
     # Initialize loss function
     loss_fn = TotalLoss(
         lambda_det=args.lambda_det,
-        lambda_rot=args.lambda_rot,
         lambda_desc=args.lambda_desc,
         margin=args.margin,
+        alpha_orient=args.alpha_orient,
     )
 
     # Initialize optimizer

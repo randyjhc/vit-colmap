@@ -46,18 +46,17 @@ class TrainingLossPlotter:
         self._history_cache: Optional[Dict] = None
 
         # Regex patterns for parsing log lines
+        # Updated to capture detector components: Det: X.XX (Score: Y.YY, Orient: Z.ZZ)
         self.train_pattern = re.compile(
             r"Epoch (\d+) completed.*?"
             r"Avg Loss: ([\d.]+).*?"
-            r"Det: ([\d.]+).*?"
-            r"Rot: ([\d.]+).*?"
+            r"Det: ([\d.]+)\s+\(Score: ([\d.]+), Orient: ([\d.]+)\).*?"
             r"Desc: ([\d.]+)"
         )
         self.val_pattern = re.compile(
             r"Validation \| "
             r"Loss: ([\d.]+).*?"
-            r"Det: ([\d.]+).*?"
-            r"Rot: ([\d.]+).*?"
+            r"Det: ([\d.]+)\s+\(Score: ([\d.]+), Orient: ([\d.]+)\).*?"
             r"Desc: ([\d.]+)"
         )
 
@@ -98,12 +97,19 @@ class TrainingLossPlotter:
             Dictionary with structure:
             {
                 'epochs': [1, 2, 3, ...],
-                'train': {'total': [...], 'detector': [...], 'rotation': [...], 'descriptor': [...]},
+                'train': {
+                    'total': [...],
+                    'detector': [...],
+                    'detector_score': [...],
+                    'detector_orient': [...],
+                    'descriptor': [...]
+                },
                 'val': {
                     'epochs': [1, 2, 3, ...],
                     'total': [...],
                     'detector': [...],
-                    'rotation': [...],
+                    'detector_score': [...],
+                    'detector_orient': [...],
                     'descriptor': [...]
                 }
             }
@@ -118,7 +124,8 @@ class TrainingLossPlotter:
                 "train": {
                     "total": [],
                     "detector": [],
-                    "rotation": [],
+                    "detector_score": [],
+                    "detector_orient": [],
                     "descriptor": [],
                 },
                 "val": None,
@@ -128,14 +135,16 @@ class TrainingLossPlotter:
         train_losses: Dict[str, List[float]] = {
             "total": [],
             "detector": [],
-            "rotation": [],
+            "detector_score": [],
+            "detector_orient": [],
             "descriptor": [],
         }
         val_epochs: List[int] = []
         val_losses_data: Dict[str, List[float]] = {
             "total": [],
             "detector": [],
-            "rotation": [],
+            "detector_score": [],
+            "detector_orient": [],
             "descriptor": [],
         }
 
@@ -152,13 +161,15 @@ class TrainingLossPlotter:
                         epoch = int(train_match.group(1))
                         total_loss = float(train_match.group(2))
                         det_loss = float(train_match.group(3))
-                        rot_loss = float(train_match.group(4))
-                        desc_loss = float(train_match.group(5))
+                        det_score_loss = float(train_match.group(4))
+                        det_orient_loss = float(train_match.group(5))
+                        desc_loss = float(train_match.group(6))
 
                         epochs.append(epoch)
                         train_losses["total"].append(total_loss)
                         train_losses["detector"].append(det_loss)
-                        train_losses["rotation"].append(rot_loss)
+                        train_losses["detector_score"].append(det_score_loss)
+                        train_losses["detector_orient"].append(det_orient_loss)
                         train_losses["descriptor"].append(desc_loss)
 
                         current_epoch = epoch
@@ -169,13 +180,15 @@ class TrainingLossPlotter:
                     if val_match and current_epoch is not None:
                         total_loss = float(val_match.group(1))
                         det_loss = float(val_match.group(2))
-                        rot_loss = float(val_match.group(3))
-                        desc_loss = float(val_match.group(4))
+                        det_score_loss = float(val_match.group(3))
+                        det_orient_loss = float(val_match.group(4))
+                        desc_loss = float(val_match.group(5))
 
                         val_epochs.append(current_epoch)
                         val_losses_data["total"].append(total_loss)
                         val_losses_data["detector"].append(det_loss)
-                        val_losses_data["rotation"].append(rot_loss)
+                        val_losses_data["detector_score"].append(det_score_loss)
+                        val_losses_data["detector_orient"].append(det_orient_loss)
                         val_losses_data["descriptor"].append(desc_loss)
                         continue
 
@@ -186,7 +199,8 @@ class TrainingLossPlotter:
                 "train": {
                     "total": [],
                     "detector": [],
-                    "rotation": [],
+                    "detector_score": [],
+                    "detector_orient": [],
                     "descriptor": [],
                 },
                 "val": None,
@@ -199,7 +213,8 @@ class TrainingLossPlotter:
                 "epochs": val_epochs,
                 "total": val_losses_data["total"],
                 "detector": val_losses_data["detector"],
-                "rotation": val_losses_data["rotation"],
+                "detector_score": val_losses_data["detector_score"],
+                "detector_orient": val_losses_data["detector_orient"],
                 "descriptor": val_losses_data["descriptor"],
             }
             logger.info(
@@ -301,7 +316,7 @@ class TrainingLossPlotter:
         show: bool = False,
         title: str = "Loss Components",
     ) -> Optional[Path]:
-        """Plot individual loss components (detector, rotation, descriptor).
+        """Plot individual loss components including detector breakdown.
 
         Args:
             output_path: Optional path to save the figure
@@ -317,15 +332,23 @@ class TrainingLossPlotter:
             logger.warning("No training history available to plot")
             return None
 
-        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+        # 2x3 grid: top row (total, detector, descriptor), bottom row (score, orient, empty)
+        fig, axes = plt.subplots(2, 3, figsize=(15, 10))
         fig.suptitle(title, fontsize=16, fontweight="bold")
 
         epochs = history["epochs"]
-        loss_types = ["total", "detector", "rotation", "descriptor"]
-        titles = ["Total Loss", "Detector Loss", "Rotation Loss", "Descriptor Loss"]
 
-        for idx, (loss_type, subplot_title) in enumerate(zip(loss_types, titles)):
-            ax = axes[idx // 2, idx % 2]
+        # Define plots: (row, col, loss_type, title)
+        plots = [
+            (0, 0, "total", "Total Loss"),
+            (0, 1, "detector", "Detector Loss (Combined)"),
+            (0, 2, "descriptor", "Descriptor Loss"),
+            (1, 0, "detector_score", "Detector: Score Component"),
+            (1, 1, "detector_orient", "Detector: Orientation Component"),
+        ]
+
+        for row, col, loss_type, subplot_title in plots:
+            ax = axes[row, col]
 
             train_losses = history["train"][loss_type]
 
@@ -359,6 +382,9 @@ class TrainingLossPlotter:
             ax.legend(fontsize=9)
             ax.grid(True, linestyle="--", alpha=0.3)
             ax.yaxis.set_major_formatter(plt.FormatStrFormatter("%.4f"))
+
+        # Hide the unused subplot (bottom right)
+        axes[1, 2].axis("off")
 
         fig.tight_layout()
 

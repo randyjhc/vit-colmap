@@ -9,93 +9,80 @@ from typing import Dict, Optional
 
 
 class DetectorLoss(nn.Module):
-    """Binary cross-entropy loss for keypoint detection."""
+    """
+    Multi-task detector loss for keypoint detection and orientation.
 
-    def __init__(self):
+    Combines:
+    1. BCE loss for keypoint score heatmap (dense, all pixels)
+    2. Circular L2 loss for orientation at sampled keypoints (sparse, K points)
+    """
+
+    def __init__(self, alpha_orient: float = 0.5):
+        """
+        Args:
+            alpha_orient: Weight for orientation loss relative to score loss
+        """
         super().__init__()
+        self.alpha_orient = alpha_orient
 
     def forward(
         self,
         score_logits: torch.Tensor,
-        targets: torch.Tensor,
+        score_targets: torch.Tensor,
+        pred_orientations: Optional[torch.Tensor] = None,
+        gt_orientations: Optional[torch.Tensor] = None,
         weights: Optional[torch.Tensor] = None,
-    ) -> torch.Tensor:
+    ) -> Dict[str, torch.Tensor]:
         """
-        Compute BCE loss for keypoint detection.
+        Compute combined detector loss.
 
         Args:
             score_logits: (B, 1, H, W) or (B, H, W) raw score logits
-            targets: (B, 1, H, W) or (B, H, W) ground truth heatmap [0, 1]
-            weights: Optional (B, 1, H, W) or (B, H, W) importance weights
+            score_targets: (B, 1, H, W) or (B, H, W) ground truth heatmap [0, 1]
+            pred_orientations: Optional (B, K) predicted orientations in radians
+            gt_orientations: Optional (B, K) ground truth orientations in radians
+            weights: Optional (B, 1, H, W) or (B, H, W) importance weights for score loss
 
         Returns:
-            Scalar loss value
+            Dict with keys:
+                - 'loss': Combined loss (for backpropagation)
+                - 'score': Score component (BCE loss)
+                - 'orient': Orientation component (circular L2 loss)
         """
-        # Ensure consistent shapes
+        # Ensure consistent shapes for score loss
         if score_logits.dim() == 3:
             score_logits = score_logits.unsqueeze(1)
-        if targets.dim() == 3:
-            targets = targets.unsqueeze(1)
+        if score_targets.dim() == 3:
+            score_targets = score_targets.unsqueeze(1)
         if weights is not None and weights.dim() == 3:
             weights = weights.unsqueeze(1)
 
-        loss = F.binary_cross_entropy_with_logits(
-            score_logits, targets, weight=weights, reduction="mean"
-        )
-        return loss
-
-
-class RotationEquivarianceLoss(nn.Module):
-    """
-    Loss for rotation equivariance of keypoint orientations.
-
-    Supervises the model to predict orientations that are consistent with:
-    1. Local gradient directions (from SIFT-like orientation computation)
-    2. Global rotation from homography transformation
-
-    The ground truth orientations are computed from image gradients, ensuring
-    per-keypoint variation. The loss enforces that predicted orientations match
-    these gradient-based orientations while maintaining rotation equivariance.
-    """
-
-    def __init__(self):
-        super().__init__()
-
-    def forward(
-        self,
-        orientations1: torch.Tensor,
-        orientations2: torch.Tensor,
-        rotation_angle: torch.Tensor,
-    ) -> torch.Tensor:
-        """
-        Ensure orientation2 ≈ orientation1 + rotation_angle.
-
-        Uses circular loss to handle wraparound at ±π.
-
-        Args:
-            orientations1: (B, K) gradient-based orientations in image 1 (radians)
-            orientations2: (B, K) gradient-based orientations in image 2 (radians)
-            rotation_angle: (B,) or (B, K) rotation from image 1 to 2 (radians)
-
-        Returns:
-            Scalar loss value
-        """
-        # Expand rotation_angle if needed
-        if rotation_angle.dim() == 1:
-            rotation_angle = rotation_angle.unsqueeze(1)  # (B, 1)
-
-        # Expected orientation in image 2
-        expected_orientation2 = orientations1 + rotation_angle
-
-        # Circular difference (handles wraparound)
-        diff = torch.atan2(
-            torch.sin(orientations2 - expected_orientation2),
-            torch.cos(orientations2 - expected_orientation2),
+        # 1. Score loss (BCE on heatmap)
+        L_score = F.binary_cross_entropy_with_logits(
+            score_logits, score_targets, weight=weights, reduction="mean"
         )
 
-        # L2 loss on angular difference
-        loss = diff.pow(2).mean()
-        return loss
+        # 2. Orientation loss (circular L2 at keypoint locations)
+        if pred_orientations is not None and gt_orientations is not None:
+            # Circular difference (handles wraparound at ±π)
+            diff = torch.atan2(
+                torch.sin(pred_orientations - gt_orientations),
+                torch.cos(pred_orientations - gt_orientations),
+            )
+            L_orient = diff.pow(2).mean()
+
+            # Combined loss
+            loss = L_score + self.alpha_orient * L_orient
+        else:
+            # No orientation loss if not provided
+            L_orient = torch.tensor(0.0, device=L_score.device)
+            loss = L_score
+
+        return {
+            "loss": loss,
+            "score": L_score,
+            "orient": L_orient,
+        }
 
 
 class DescriptorLoss(nn.Module):
@@ -207,24 +194,22 @@ class TotalLoss(nn.Module):
     def __init__(
         self,
         lambda_det: float = 1.0,
-        lambda_rot: float = 0.5,
         lambda_desc: float = 1.0,
         margin: float = 0.5,
+        alpha_orient: float = 0.5,
     ):
         """
         Args:
-            lambda_det: Weight for detector loss
-            lambda_rot: Weight for rotation equivariance loss
+            lambda_det: Weight for detector loss (includes orientation)
             lambda_desc: Weight for descriptor loss
             margin: Margin for triplet loss
+            alpha_orient: Weight for orientation loss within detector loss
         """
         super().__init__()
         self.lambda_det = lambda_det
-        self.lambda_rot = lambda_rot
         self.lambda_desc = lambda_desc
 
-        self.detector_loss = DetectorLoss()
-        self.rotation_loss = RotationEquivarianceLoss()
+        self.detector_loss = DetectorLoss(alpha_orient=alpha_orient)
         self.descriptor_loss = DescriptorLoss(margin=margin)
 
     def forward(
@@ -238,15 +223,14 @@ class TotalLoss(nn.Module):
         Args:
             outputs: Dict containing:
                 - score_logits: (B, 1, H, W) keypoint score logits
-                - orientations1: (B, K) orientations in image 1
-                - orientations2: (B, K) orientations in image 2
+                - keypoints2_full: (B, 4, H, W) full keypoint output from image 2
+                - orientations2: (B, K) ground truth orientations for image 2
                 - z1: (B, K, 128) descriptors from image 1
                 - z2: (B, K, 128) descriptors from image 2
                 - negatives: (B, K, N, 128) negative descriptors
 
             targets: Dict containing:
                 - score_gt: (B, 1, H, W) ground truth score heatmap
-                - rotation_angle: (B,) rotation angle from image 1 to 2
                 - invariant_coords: (B, K, 2) coordinates of invariant points
 
         Returns:
@@ -254,27 +238,37 @@ class TotalLoss(nn.Module):
         """
         losses = {}
 
-        # 1. Keypoint detection loss (BCE)
+        # 1. Combined detector loss (score BCE + orientation)
         if "score_logits" in outputs and "score_gt" in targets:
-            L_det = self.detector_loss(outputs["score_logits"], targets["score_gt"])
+            # Sample predicted orientations at invariant point locations
+            if "keypoints2_full" in outputs and "orientations2" in outputs:
+                pred_orientations = self._sample_orientations_at_coords(
+                    outputs["keypoints2_full"], targets["invariant_coords"]
+                )
+                gt_orientations = outputs["orientations2"]
+            else:
+                pred_orientations = None
+                gt_orientations = None
+
+            detector_result = self.detector_loss(
+                outputs["score_logits"],
+                targets["score_gt"],
+                pred_orientations=pred_orientations,
+                gt_orientations=gt_orientations,
+            )
+            # Extract combined loss for backprop
+            L_det = detector_result["loss"]
             losses["detector"] = L_det
+            # Also log individual components
+            losses["detector_score"] = detector_result["score"]
+            losses["detector_orient"] = detector_result["orient"]
         else:
             L_det = torch.tensor(0.0, device=outputs["z1"].device)
             losses["detector"] = L_det
+            losses["detector_score"] = torch.tensor(0.0, device=outputs["z1"].device)
+            losses["detector_orient"] = torch.tensor(0.0, device=outputs["z1"].device)
 
-        # 2. Rotation equivariance loss
-        if "rotation_angle" in targets:
-            L_rot = self.rotation_loss(
-                outputs["orientations1"],
-                outputs["orientations2"],
-                targets["rotation_angle"],
-            )
-            losses["rotation"] = L_rot
-        else:
-            L_rot = torch.tensor(0.0, device=outputs["z1"].device)
-            losses["rotation"] = L_rot
-
-        # 3. Descriptor loss weighted by keypoint scores
+        # 2. Descriptor loss weighted by keypoint scores
         # w(p) = sigmoid(S_logit(p))
         if "score_logits" in outputs and "invariant_coords" in targets:
             # Sample score logits at invariant point locations
@@ -293,12 +287,8 @@ class TotalLoss(nn.Module):
         )
         losses["descriptor"] = L_desc
 
-        # 4. Total loss
-        L_total = (
-            self.lambda_det * L_det
-            + self.lambda_rot * L_rot
-            + self.lambda_desc * L_desc
-        )
+        # 3. Total loss
+        L_total = self.lambda_det * L_det + self.lambda_desc * L_desc
         losses["total"] = L_total
 
         return losses
@@ -336,3 +326,40 @@ class TotalLoss(nn.Module):
         # Reshape to (B, K)
         scores = sampled.squeeze(1).squeeze(-1)
         return scores
+
+    def _sample_orientations_at_coords(
+        self,
+        keypoint_outputs: torch.Tensor,
+        coords: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Sample orientations from keypoint head output at specified coordinates.
+
+        Args:
+            keypoint_outputs: (B, 4, H, W) - [score, dx, dy, orientation]
+            coords: (B, K, 2) coordinates (x, y) in feature map space
+
+        Returns:
+            orientations: (B, K) sampled orientations in radians
+        """
+        B, _, H, W = keypoint_outputs.shape
+
+        # Extract orientation channel (channel 3)
+        orientations_map = keypoint_outputs[:, 3:4, :, :]  # (B, 1, H, W)
+
+        # Normalize coordinates to [-1, 1] for grid_sample
+        grid = coords.clone()
+        grid[..., 0] = (grid[..., 0] / (W - 1)) * 2 - 1  # x
+        grid[..., 1] = (grid[..., 1] / (H - 1)) * 2 - 1  # y
+
+        # Reshape for grid_sample: (B, K, 1, 2)
+        grid = grid.unsqueeze(2)
+
+        # Sample: output is (B, 1, K, 1)
+        sampled = F.grid_sample(
+            orientations_map, grid, mode="bilinear", align_corners=False
+        )
+
+        # Reshape to (B, K)
+        orientations = sampled.squeeze(1).squeeze(-1)
+        return orientations
