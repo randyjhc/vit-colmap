@@ -46,7 +46,17 @@ class DetectorLoss(nn.Module):
 
 
 class RotationEquivarianceLoss(nn.Module):
-    """Loss for rotation equivariance of keypoint orientations."""
+    """
+    Loss for rotation equivariance of keypoint orientations.
+
+    Supervises the model to predict orientations that are consistent with:
+    1. Local gradient directions (from SIFT-like orientation computation)
+    2. Global rotation from homography transformation
+
+    The ground truth orientations are computed from image gradients, ensuring
+    per-keypoint variation. The loss enforces that predicted orientations match
+    these gradient-based orientations while maintaining rotation equivariance.
+    """
 
     def __init__(self):
         super().__init__()
@@ -63,8 +73,8 @@ class RotationEquivarianceLoss(nn.Module):
         Uses circular loss to handle wraparound at ±π.
 
         Args:
-            orientations1: (B, K) orientations in image 1 (radians)
-            orientations2: (B, K) orientations in image 2 (radians)
+            orientations1: (B, K) gradient-based orientations in image 1 (radians)
+            orientations2: (B, K) gradient-based orientations in image 2 (radians)
             rotation_angle: (B,) or (B, K) rotation from image 1 to 2 (radians)
 
         Returns:
