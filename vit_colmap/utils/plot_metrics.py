@@ -23,9 +23,12 @@ class MetricsPlotter:
         results_dir: Path,
         color_sift: Optional[Tuple[float, ...]] = None,
         color_vit: Optional[Tuple[float, ...]] = None,
+        color_third: Optional[Tuple[float, ...]] = None,
         enable_cache: bool = True,
         sift_filename: str = "sift.json",
         vit_filename: str = "vit.json",
+        third_filename: Optional[str] = None,
+        third_label: str = "Method 3",
     ):
         """Initialize the MetricsPlotter.
 
@@ -33,30 +36,43 @@ class MetricsPlotter:
             results_dir: Directory containing scan subdirectories with metrics JSON files
             color_sift: RGBA tuple for SIFT bars (defaults to tab10 color 0)
             color_vit: RGBA tuple for ViT bars (defaults to tab10 color 1)
+            color_third: RGBA tuple for third method bars (defaults to tab10 color 2)
             enable_cache: Whether to cache loaded metrics for performance
             sift_filename: Name of SIFT metrics JSON file (default: "sift.json")
             vit_filename: Name of ViT metrics JSON file (default: "vit.json")
+            third_filename: Optional name of third metrics JSON file
+            third_label: Label for the third method (default: "Method 3")
         """
         self.results_dir = results_dir.resolve()
         self.color_sift = color_sift or plt.get_cmap("tab10")(0)
         self.color_vit = color_vit or plt.get_cmap("tab10")(1)
+        self.color_third = color_third or plt.get_cmap("tab10")(2)
         self.enable_cache = enable_cache
         self.sift_filename = sift_filename
         self.vit_filename = vit_filename
+        self.third_filename = third_filename
+        self.third_label = third_label
         self._metrics_cache: Dict[
-            str, Tuple[Optional[MetricsResult], Optional[MetricsResult]]
+            str,
+            Tuple[
+                Optional[MetricsResult],
+                Optional[MetricsResult],
+                Optional[MetricsResult],
+            ],
         ] = {}
 
     def _load_metrics_pair(
         self, scan_name: str
-    ) -> Tuple[Optional[MetricsResult], Optional[MetricsResult]]:
-        """Load SIFT and ViT metrics for a scan, with optional caching.
+    ) -> Tuple[
+        Optional[MetricsResult], Optional[MetricsResult], Optional[MetricsResult]
+    ]:
+        """Load SIFT, ViT, and optional third metrics for a scan, with optional caching.
 
         Args:
             scan_name: Name of the scan subdirectory
 
         Returns:
-            Tuple of (sift_metrics, vit_metrics), where either can be None if missing
+            Tuple of (sift_metrics, vit_metrics, third_metrics), where any can be None if missing
         """
         if self.enable_cache and scan_name in self._metrics_cache:
             return self._metrics_cache[scan_name]
@@ -67,6 +83,7 @@ class MetricsPlotter:
 
         sift_metrics: Optional[MetricsResult] = None
         vit_metrics: Optional[MetricsResult] = None
+        third_metrics: Optional[MetricsResult] = None
 
         if sift_path.exists():
             sift_metrics = MetricsExporter.load_json(sift_path)
@@ -78,7 +95,16 @@ class MetricsPlotter:
         else:
             logger.warning("Missing ViT metrics for %s at %s", scan_name, vit_path)
 
-        result = (sift_metrics, vit_metrics)
+        if self.third_filename:
+            third_path = scan_dir / self.third_filename
+            if third_path.exists():
+                third_metrics = MetricsExporter.load_json(third_path)
+            else:
+                logger.warning(
+                    "Missing third metrics for %s at %s", scan_name, third_path
+                )
+
+        result = (sift_metrics, vit_metrics, third_metrics)
         if self.enable_cache:
             self._metrics_cache[scan_name] = result
 
@@ -166,6 +192,7 @@ class MetricsPlotter:
         sift_raw: List[float],
         vit_raw: List[float],
         title: str,
+        third_raw: Optional[List[float]] = None,
     ) -> None:
         """Render a ratio comparison panel with bars annotated with raw values.
 
@@ -175,33 +202,69 @@ class MetricsPlotter:
             sift_raw: Raw SIFT values
             vit_raw: Raw ViT values
             title: Panel title
+            third_raw: Optional raw values for third method
         """
         sift_ratios: List[float] = []
         vit_ratios: List[float] = []
-        for s_val, v_val in zip(sift_raw, vit_raw):
+        third_ratios: List[float] = []
+
+        for i, (s_val, v_val) in enumerate(zip(sift_raw, vit_raw)):
             ratio_s, ratio_v = self._compute_ratio_pair(s_val, v_val)
             sift_ratios.append(ratio_s)
             vit_ratios.append(ratio_v)
 
+            if third_raw:
+                t_val = third_raw[i]
+                _, ratio_t = self._compute_ratio_pair(s_val, t_val)
+                third_ratios.append(ratio_t)
+
         indices = np.arange(len(labels))
-        width = 0.35
+        has_third = third_raw is not None and len(third_raw) > 0
+        width = 0.25 if has_third else 0.35
+
         sift_ratios_arr = np.nan_to_num(np.array(sift_ratios, dtype=float), nan=0.0)
         vit_ratios_arr = np.nan_to_num(np.array(vit_ratios, dtype=float), nan=0.0)
 
-        bars_sift = ax.bar(
-            indices - width / 2,
-            sift_ratios_arr,
-            width=width,
-            color=self.color_sift,
-            label="SIFT (baseline)",
-        )
-        bars_vit = ax.bar(
-            indices + width / 2,
-            vit_ratios_arr,
-            width=width,
-            color=self.color_vit,
-            label="ViT",
-        )
+        if has_third:
+            bars_sift = ax.bar(
+                indices - width,
+                sift_ratios_arr,
+                width=width,
+                color=self.color_sift,
+                label="SIFT (baseline)",
+            )
+            bars_vit = ax.bar(
+                indices,
+                vit_ratios_arr,
+                width=width,
+                color=self.color_vit,
+                label="Learned ViT",
+            )
+            third_ratios_arr = np.nan_to_num(
+                np.array(third_ratios, dtype=float), nan=0.0
+            )
+            bars_third = ax.bar(
+                indices + width,
+                third_ratios_arr,
+                width=width,
+                color=self.color_third,
+                label=self.third_label,
+            )
+        else:
+            bars_sift = ax.bar(
+                indices - width / 2,
+                sift_ratios_arr,
+                width=width,
+                color=self.color_sift,
+                label="SIFT (baseline)",
+            )
+            bars_vit = ax.bar(
+                indices + width / 2,
+                vit_ratios_arr,
+                width=width,
+                color=self.color_vit,
+                label="ViT",
+            )
 
         ax.set_xticks(indices)
         ax.set_xticklabels(labels, rotation=20, ha="right")
@@ -210,11 +273,16 @@ class MetricsPlotter:
         ax.grid(axis="y", linestyle="--", alpha=0.3)
         ax.axhline(1.0, color="gray", linestyle="--", linewidth=1)
 
-        combined = (
-            np.concatenate([sift_ratios_arr, vit_ratios_arr])
-            if len(labels)
-            else np.array([1.0])
-        )
+        if has_third:
+            combined = np.concatenate(
+                [sift_ratios_arr, vit_ratios_arr, third_ratios_arr]
+            )
+        else:
+            combined = (
+                np.concatenate([sift_ratios_arr, vit_ratios_arr])
+                if len(labels)
+                else np.array([1.0])
+            )
         max_ratio = float(np.nanmax(combined))
         max_ratio = max(1.05, max_ratio * 1.1)
         ax.set_ylim(0, max_ratio)
@@ -222,6 +290,8 @@ class MetricsPlotter:
         ax.legend()
         self._annotate_bars_with_values(ax, bars_sift, sift_raw)
         self._annotate_bars_with_values(ax, bars_vit, vit_raw)
+        if has_third:
+            self._annotate_bars_with_values(ax, bars_third, third_raw)
 
     def plot_single_scan(
         self,
@@ -239,9 +309,9 @@ class MetricsPlotter:
         Returns:
             The output path if specified, None otherwise
         """
-        sift_metrics, vit_metrics = self._load_metrics_pair(scan_name)
+        sift_metrics, vit_metrics, third_metrics = self._load_metrics_pair(scan_name)
 
-        if sift_metrics is None and vit_metrics is None:
+        if sift_metrics is None and vit_metrics is None and third_metrics is None:
             logger.warning(
                 "No metrics found for %s in %s; generating zero-valued plot.",
                 scan_name,
@@ -265,12 +335,21 @@ class MetricsPlotter:
             self._feature_value(vit_metrics, "min_keypoints"),
             self._feature_value(vit_metrics, "max_keypoints"),
         ]
+        feature_third_raw = None
+        if third_metrics is not None:
+            feature_third_raw = [
+                self._feature_value(third_metrics, "total_keypoints"),
+                self._feature_value(third_metrics, "avg_keypoints_per_image"),
+                self._feature_value(third_metrics, "min_keypoints"),
+                self._feature_value(third_metrics, "max_keypoints"),
+            ]
         self._plot_ratio_panel(
             axes[0],
             feature_labels,
             feature_sift_raw,
             feature_vit_raw,
             "Feature Extraction",
+            feature_third_raw,
         )
 
         # Matching metrics
@@ -292,12 +371,21 @@ class MetricsPlotter:
             self._matching_value(vit_metrics, "total_inlier_matches"),
             self._matching_value(vit_metrics, "inlier_ratio"),
         ]
+        matching_third_raw = None
+        if third_metrics is not None:
+            matching_third_raw = [
+                self._matching_value(third_metrics, "matched_pairs"),
+                self._matching_value(third_metrics, "total_raw_matches"),
+                self._matching_value(third_metrics, "total_inlier_matches"),
+                self._matching_value(third_metrics, "inlier_ratio"),
+            ]
         self._plot_ratio_panel(
             axes[1],
             matching_labels,
             matching_sift_raw,
             matching_vit_raw,
             "Feature Matching",
+            matching_third_raw,
         )
 
         # Reconstruction metrics
@@ -322,12 +410,22 @@ class MetricsPlotter:
             self._reconstruction_value(vit_metrics, "avg_track_length"),
             self._reconstruction_value(vit_metrics, "avg_reprojection_error"),
         ]
+        reconstruction_third_raw = None
+        if third_metrics is not None:
+            reconstruction_third_raw = [
+                self._reconstruction_value(third_metrics, "registered_images"),
+                self._reconstruction_value(third_metrics, "registration_rate"),
+                self._reconstruction_value(third_metrics, "total_3d_points"),
+                self._reconstruction_value(third_metrics, "avg_track_length"),
+                self._reconstruction_value(third_metrics, "avg_reprojection_error"),
+            ]
         self._plot_ratio_panel(
             axes[2],
             reconstruction_labels,
             reconstruction_sift_raw,
             reconstruction_vit_raw,
             "3D Reconstruction",
+            reconstruction_third_raw,
         )
 
         fig.tight_layout(rect=[0, 0.03, 1, 0.95])
@@ -393,7 +491,7 @@ class MetricsPlotter:
 
         for scan in scans:
             display_scans.append(scan)
-            sift_metrics, vit_metrics = self._load_metrics_pair(scan)
+            sift_metrics, vit_metrics, third_metrics = self._load_metrics_pair(scan)
 
             missing = False
             if sift_metrics is None or vit_metrics is None:
