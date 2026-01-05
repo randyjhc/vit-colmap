@@ -48,6 +48,9 @@ Examples:
   # Plot only specific type
   python scripts/plot_training_losses.py --log-dir logs --plot-type curve
   python scripts/plot_training_losses.py --log-dir logs --plot-type components
+
+  # Use single row layout for components
+  python scripts/plot_training_losses.py --log-dir logs --plot-type components --layout single_row
         """,
     )
 
@@ -74,6 +77,12 @@ Examples:
         choices=["all", "curve", "components"],
         default="all",
         help="Type of plot to generate (default: all)",
+    )
+    parser.add_argument(
+        "--layout",
+        choices=["grid", "single_row"],
+        default="grid",
+        help="Layout for loss components plot: 'grid' (2x3) or 'single_row' (1x4) (default: grid)",
     )
     parser.add_argument(
         "--show",
@@ -157,6 +166,7 @@ Examples:
         result = plotter.plot_loss_components(
             output_path=loss_components_path,
             show=args.show,
+            layout=args.layout,
         )
         if result:
             results["loss_components"] = result

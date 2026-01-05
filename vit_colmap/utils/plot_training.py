@@ -46,7 +46,7 @@ class TrainingLossPlotter:
         self._history_cache: Optional[Dict] = None
 
         # Regex patterns for parsing log lines
-        # Updated to capture detector components: Det: X.XX (Score: Y.YY, Orient: Z.ZZ)
+        # New format: Det: X.XX (Score: Y.YY, Orient: Z.ZZ)
         self.train_pattern = re.compile(
             r"Epoch (\d+) completed.*?"
             r"Avg Loss: ([\d.]+).*?"
@@ -57,6 +57,21 @@ class TrainingLossPlotter:
             r"Validation \| "
             r"Loss: ([\d.]+).*?"
             r"Det: ([\d.]+)\s+\(Score: ([\d.]+), Orient: ([\d.]+)\).*?"
+            r"Desc: ([\d.]+)"
+        )
+        # Old format: Det: X.XX | Rot: Y.YY | Desc: Z.ZZ
+        self.train_pattern_old = re.compile(
+            r"Epoch (\d+) completed.*?"
+            r"Avg Loss: ([\d.]+).*?"
+            r"Det: ([\d.]+).*?"
+            r"Rot: ([\d.]+).*?"
+            r"Desc: ([\d.]+)"
+        )
+        self.val_pattern_old = re.compile(
+            r"Validation \| "
+            r"Loss: ([\d.]+).*?"
+            r"Det: ([\d.]+).*?"
+            r"Rot: ([\d.]+).*?"
             r"Desc: ([\d.]+)"
         )
 
@@ -111,7 +126,8 @@ class TrainingLossPlotter:
                     'detector_score': [...],
                     'detector_orient': [...],
                     'descriptor': [...]
-                }
+                },
+                'format': 'new' or 'old' or None
             }
         """
         if self._history_cache is not None and not force_reload:
@@ -129,6 +145,7 @@ class TrainingLossPlotter:
                     "descriptor": [],
                 },
                 "val": None,
+                "format": None,
             }
 
         epochs: List[int] = []
@@ -150,14 +167,22 @@ class TrainingLossPlotter:
 
         logger.info("Parsing log file: %s", self.log_file)
 
+        log_format = None  # Track which format we're using: 'new' or 'old'
+
         try:
             with open(self.log_file, "r") as f:
                 current_epoch = None
 
                 for line in f:
-                    # Try to match training loss line
+                    # Try to match training loss line (new format first)
                     train_match = self.train_pattern.search(line)
                     if train_match:
+                        if log_format is None:
+                            log_format = "new"
+                            logger.info(
+                                "Detected new log format (combined detector loss)"
+                            )
+
                         epoch = int(train_match.group(1))
                         total_loss = float(train_match.group(2))
                         det_loss = float(train_match.group(3))
@@ -175,7 +200,34 @@ class TrainingLossPlotter:
                         current_epoch = epoch
                         continue
 
-                    # Try to match validation loss line
+                    # Try old format if new format didn't match
+                    train_match_old = self.train_pattern_old.search(line)
+                    if train_match_old:
+                        if log_format is None:
+                            log_format = "old"
+                            logger.info(
+                                "Detected old log format (separate Det/Rot losses)"
+                            )
+
+                        epoch = int(train_match_old.group(1))
+                        total_loss = float(train_match_old.group(2))
+                        det_score_loss = float(train_match_old.group(3))
+                        det_orient_loss = float(train_match_old.group(4))
+                        desc_loss = float(train_match_old.group(5))
+                        # Compute combined detector loss for old format
+                        det_loss = det_score_loss + det_orient_loss
+
+                        epochs.append(epoch)
+                        train_losses["total"].append(total_loss)
+                        train_losses["detector"].append(det_loss)
+                        train_losses["detector_score"].append(det_score_loss)
+                        train_losses["detector_orient"].append(det_orient_loss)
+                        train_losses["descriptor"].append(desc_loss)
+
+                        current_epoch = epoch
+                        continue
+
+                    # Try to match validation loss line (new format first)
                     val_match = self.val_pattern.search(line)
                     if val_match and current_epoch is not None:
                         total_loss = float(val_match.group(1))
@@ -183,6 +235,24 @@ class TrainingLossPlotter:
                         det_score_loss = float(val_match.group(3))
                         det_orient_loss = float(val_match.group(4))
                         desc_loss = float(val_match.group(5))
+
+                        val_epochs.append(current_epoch)
+                        val_losses_data["total"].append(total_loss)
+                        val_losses_data["detector"].append(det_loss)
+                        val_losses_data["detector_score"].append(det_score_loss)
+                        val_losses_data["detector_orient"].append(det_orient_loss)
+                        val_losses_data["descriptor"].append(desc_loss)
+                        continue
+
+                    # Try old format validation if new format didn't match
+                    val_match_old = self.val_pattern_old.search(line)
+                    if val_match_old and current_epoch is not None:
+                        total_loss = float(val_match_old.group(1))
+                        det_score_loss = float(val_match_old.group(2))
+                        det_orient_loss = float(val_match_old.group(3))
+                        desc_loss = float(val_match_old.group(4))
+                        # Compute combined detector loss for old format
+                        det_loss = det_score_loss + det_orient_loss
 
                         val_epochs.append(current_epoch)
                         val_losses_data["total"].append(total_loss)
@@ -204,6 +274,7 @@ class TrainingLossPlotter:
                     "descriptor": [],
                 },
                 "val": None,
+                "format": None,
             }
 
         # Prepare validation losses with separate epoch tracking
@@ -231,6 +302,7 @@ class TrainingLossPlotter:
             "epochs": epochs,
             "train": train_losses,
             "val": val_losses,
+            "format": log_format,
         }
 
         self._history_cache = history
@@ -315,6 +387,7 @@ class TrainingLossPlotter:
         output_path: Optional[Path] = None,
         show: bool = False,
         title: str = "Loss Components",
+        layout: str = "grid",
     ) -> Optional[Path]:
         """Plot individual loss components including detector breakdown.
 
@@ -322,6 +395,7 @@ class TrainingLossPlotter:
             output_path: Optional path to save the figure
             show: Whether to display the plot interactively
             title: Plot title
+            layout: Layout style - "grid" for 2x3 grid or "single_row" for 1x4 row
 
         Returns:
             The output path if specified, None otherwise
@@ -332,59 +406,180 @@ class TrainingLossPlotter:
             logger.warning("No training history available to plot")
             return None
 
-        # 2x3 grid: top row (total, detector, descriptor), bottom row (score, orient, empty)
-        fig, axes = plt.subplots(2, 3, figsize=(15, 10))
-        fig.suptitle(title, fontsize=16, fontweight="bold")
-
         epochs = history["epochs"]
+        log_format = history.get("format", "new")
 
-        # Define plots: (row, col, loss_type, title)
-        plots = [
-            (0, 0, "total", "Total Loss"),
-            (0, 1, "detector", "Detector Loss (Combined)"),
-            (0, 2, "descriptor", "Descriptor Loss"),
-            (1, 0, "detector_score", "Detector: Score Component"),
-            (1, 1, "detector_orient", "Detector: Orientation Component"),
-        ]
+        # Adjust labels based on log format
+        if log_format == "old":
+            detector_label = "Detector Loss (Det+Rot)"
+            score_label = "Detector Score Loss"
+            orient_label = "Rotation Loss"
+        else:
+            detector_label = "Detector Loss (Combined)"
+            score_label = "Detector: Score Component"
+            orient_label = "Detector: Orientation Component"
 
-        for row, col, loss_type, subplot_title in plots:
-            ax = axes[row, col]
+        if layout == "single_row":
+            # 1x4 grid
+            fig, axes = plt.subplots(1, 4, figsize=(20, 5))
+            fig.suptitle(title, fontsize=16, fontweight="bold")
 
-            train_losses = history["train"][loss_type]
+            # Define plots based on format: (col, loss_type, title)
+            if log_format == "old":
+                # Old format: Total, Det, Rot, Desc (no combined detector)
+                plots = [
+                    (0, "total", "Total Loss"),
+                    (1, "detector_score", score_label),
+                    (2, "detector_orient", orient_label),
+                    (3, "descriptor", "Descriptor Loss"),
+                ]
+            else:
+                # New format: Total, Combined Detector, Descriptor, Score Component
+                plots = [
+                    (0, "total", "Total Loss"),
+                    (1, "detector", detector_label),
+                    (2, "descriptor", "Descriptor Loss"),
+                    (3, "detector_score", score_label),
+                ]
 
-            ax.plot(
-                epochs,
-                train_losses,
-                color=self.color_train,
-                linewidth=2,
-                marker="o",
-                markersize=3,
-                label="Training",
-            )
+            for col, loss_type, subplot_title in plots:
+                ax = axes[col]
 
-            # Plot validation loss if available
-            if history["val"] is not None:
-                val_epochs = history["val"]["epochs"]
-                val_losses = history["val"][loss_type]
+                train_losses = history["train"][loss_type]
+
                 ax.plot(
-                    val_epochs,
-                    val_losses,
-                    color=self.color_val,
+                    epochs,
+                    train_losses,
+                    color=self.color_train,
                     linewidth=2,
-                    marker="s",
+                    marker="o",
                     markersize=3,
-                    label="Validation",
+                    label="Training",
                 )
 
-            ax.set_xlabel("Epoch", fontsize=10)
-            ax.set_ylabel("Loss", fontsize=10)
-            ax.set_title(subplot_title, fontsize=12, fontweight="bold")
-            ax.legend(fontsize=9)
-            ax.grid(True, linestyle="--", alpha=0.3)
-            ax.yaxis.set_major_formatter(plt.FormatStrFormatter("%.4f"))
+                # Plot validation loss if available
+                if history["val"] is not None:
+                    val_epochs = history["val"]["epochs"]
+                    val_losses = history["val"][loss_type]
+                    ax.plot(
+                        val_epochs,
+                        val_losses,
+                        color=self.color_val,
+                        linewidth=2,
+                        marker="s",
+                        markersize=3,
+                        label="Validation",
+                    )
 
-        # Hide the unused subplot (bottom right)
-        axes[1, 2].axis("off")
+                ax.set_xlabel("Epoch", fontsize=10)
+                ax.set_ylabel("Loss", fontsize=10)
+                ax.set_title(subplot_title, fontsize=12, fontweight="bold")
+                ax.legend(fontsize=9)
+                ax.grid(True, linestyle="--", alpha=0.3)
+                ax.yaxis.set_major_formatter(plt.FormatStrFormatter("%.4f"))
+
+        else:  # grid layout (default)
+            if log_format == "old":
+                # Old format: 2x2 grid (Total, Det, Rot, Desc - no combined detector)
+                fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+                fig.suptitle(title, fontsize=16, fontweight="bold")
+
+                # Define plots: (row, col, loss_type, title)
+                old_grid_plots: List[Tuple[int, int, str, str]] = [
+                    (0, 0, "total", "Total Loss"),
+                    (0, 1, "detector_score", score_label),
+                    (1, 0, "detector_orient", orient_label),
+                    (1, 1, "descriptor", "Descriptor Loss"),
+                ]
+
+                for row, col, loss_type, subplot_title in old_grid_plots:
+                    ax = axes[row, col]
+
+                    train_losses = history["train"][loss_type]
+
+                    ax.plot(
+                        epochs,
+                        train_losses,
+                        color=self.color_train,
+                        linewidth=2,
+                        marker="o",
+                        markersize=3,
+                        label="Training",
+                    )
+
+                    # Plot validation loss if available
+                    if history["val"] is not None:
+                        val_epochs = history["val"]["epochs"]
+                        val_losses = history["val"][loss_type]
+                        ax.plot(
+                            val_epochs,
+                            val_losses,
+                            color=self.color_val,
+                            linewidth=2,
+                            marker="s",
+                            markersize=3,
+                            label="Validation",
+                        )
+
+                    ax.set_xlabel("Epoch", fontsize=10)
+                    ax.set_ylabel("Loss", fontsize=10)
+                    ax.set_title(subplot_title, fontsize=12, fontweight="bold")
+                    ax.legend(fontsize=9)
+                    ax.grid(True, linestyle="--", alpha=0.3)
+                    ax.yaxis.set_major_formatter(plt.FormatStrFormatter("%.4f"))
+
+            else:
+                # New format: 2x3 grid (total, detector, descriptor, score, orient, empty)
+                fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+                fig.suptitle(title, fontsize=16, fontweight="bold")
+
+                # Define plots: (row, col, loss_type, title)
+                new_grid_plots: List[Tuple[int, int, str, str]] = [
+                    (0, 0, "total", "Total Loss"),
+                    (0, 1, "detector", detector_label),
+                    (0, 2, "descriptor", "Descriptor Loss"),
+                    (1, 0, "detector_score", score_label),
+                    (1, 1, "detector_orient", orient_label),
+                ]
+
+                for row, col, loss_type, subplot_title in new_grid_plots:
+                    ax = axes[row, col]
+
+                    train_losses = history["train"][loss_type]
+
+                    ax.plot(
+                        epochs,
+                        train_losses,
+                        color=self.color_train,
+                        linewidth=2,
+                        marker="o",
+                        markersize=3,
+                        label="Training",
+                    )
+
+                    # Plot validation loss if available
+                    if history["val"] is not None:
+                        val_epochs = history["val"]["epochs"]
+                        val_losses = history["val"][loss_type]
+                        ax.plot(
+                            val_epochs,
+                            val_losses,
+                            color=self.color_val,
+                            linewidth=2,
+                            marker="s",
+                            markersize=3,
+                            label="Validation",
+                        )
+
+                    ax.set_xlabel("Epoch", fontsize=10)
+                    ax.set_ylabel("Loss", fontsize=10)
+                    ax.set_title(subplot_title, fontsize=12, fontweight="bold")
+                    ax.legend(fontsize=9)
+                    ax.grid(True, linestyle="--", alpha=0.3)
+                    ax.yaxis.set_major_formatter(plt.FormatStrFormatter("%.4f"))
+
+                # Hide the unused subplot (bottom right)
+                axes[1, 2].axis("off")
 
         fig.tight_layout()
 
