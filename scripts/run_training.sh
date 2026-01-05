@@ -1,17 +1,15 @@
-# python scripts/train_vit_features.py \
-#     --data-root data/raw/HPatches \
-#     --epochs 100 \
-#     --batch-size 4 \
-#     --lr 1e-4 \
-#     --top-k 512 \
-#     --lambda-det 1.0 \
-#     --lambda-rot 0.5 \
-#     --lambda-desc 1.0 \
-#     --checkpoint-dir checkpoints/exp1
-
 python scripts/train_vit_features.py \
     --data-root data/raw/HPatches \
     --use-amp \
     --cudnn-benchmark \
     --compile \
-    --epochs 1
+    --epochs 100 \
+    --pair-mode all_pairs \
+    --batch-size 1 \
+    --num-workers 8 \
+    --lambda-det 1.0 \
+    --lambda-desc 1.0 \
+    --alpha-orient 0.32 \
+    --resume checkpoints/best_model.pt \
+    --use-synthetic-aug \
+    --synthetic-ratio 0.5 \
