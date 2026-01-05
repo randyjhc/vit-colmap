@@ -440,6 +440,8 @@ sampler = TrainingSampler(
 ## References
 
 For implementation details, see:
-- Extended pairing: [hpatches_dataset.py:172-232](vit_colmap/dataloader/hpatches_dataset.py#L172-L232)
-- Synthetic augmentation: [synthetic_homography.py](vit_colmap/dataloader/synthetic_homography.py)
-- Threshold selection: [training_sampler.py:53-172](vit_colmap/dataloader/training_sampler.py#L53-L172)
+- Extended pairing: [hpatches_dataset.py:175-240](vit_colmap/dataloader/hpatches_dataset.py#L175-L240) - `_build_pair_list()` method
+- Synthetic augmentation: [synthetic_homography.py](vit_colmap/dataloader/synthetic_homography.py) - Full implementation
+- Threshold selection: [training_sampler.py:56+](vit_colmap/dataloader/training_sampler.py#L56) - `select_invariant_points()` method
+
+**Note**: Line numbers are approximate and may change as code evolves. Use function names to locate exact implementations.
