@@ -2,6 +2,30 @@
 
 A Vision Transformer (ViT) based feature extraction pipeline integrated with COLMAP for 3D reconstruction.
 
+## Overview
+
+Engineering exploration of replacing SIFT with Vision Transformer features in the COLMAP SfM pipeline, with a focus on system integration and empirical evaluation.
+
+**Stack:** Python, PyTorch, COLMAP, DINOv2, OpenCV, CUDA
+
+**Result**
+
+See the [Poster](./artifacts/poster.pdf)
+
+**Findings**
+
+   - ViT features did not consistently outperform SIFT on HPatches / DTU
+   - Performance was sensitive to keypoint selection, descriptor dimensionality, and matching strategy
+   - Classical SfM pipelines remain highly optimized for hand-crafted features
+
+**Takeaways**
+
+Learned representations require co-designed matching and geometry modules to outperform classical pipelines, so drop-in replacement is insufficient.
+
+**Next**
+
+Jointly data augmentation, loss function improvement, and runtime optimization.
+
 ## Setup
 
 ### Prerequisites
