@@ -69,16 +69,27 @@ if [ ! -d "$IMAGE_DIR" ]; then
     exit 1
 fi
 
-# Count images (only use diffuse lighting images ending with _3_r5000.png)
+# Count images (detect naming pattern: standard DTU or scan0 format)
 echo "Scanning for images in $IMAGE_DIR..."
+
+# First try standard DTU pattern (diffuse lighting images ending with _3_r5000.png)
 num_images=$(ls -1 ${IMAGE_DIR}/*_3_r5000.png 2>/dev/null | wc -l)
-if [ $num_images -eq 0 ]; then
-    echo "Error: No images found with pattern *_3_r5000.png"
-    echo "Available images:"
-    ls -1 ${IMAGE_DIR}/*.png | head -5
-    exit 1
+if [ $num_images -gt 0 ]; then
+    IMAGE_PATTERN="*_3_r5000.png"
+    echo "Found $num_images images with diffuse lighting (_3_r5000.png pattern)"
+else
+    # Try scan0 pattern (frame_*.png)
+    num_images=$(ls -1 ${IMAGE_DIR}/frame_*.png 2>/dev/null | wc -l)
+    if [ $num_images -gt 0 ]; then
+        IMAGE_PATTERN="frame_*.png"
+        echo "Found $num_images images with frame_*.png pattern"
+    else
+        echo "Error: No images found with pattern *_3_r5000.png or frame_*.png"
+        echo "Available images:"
+        ls -1 ${IMAGE_DIR}/*.png | head -5
+        exit 1
+    fi
 fi
-echo "Found $num_images images with diffuse lighting (_3_r5000.png pattern)"
 
 # Create temporary directory with symlinks to only the diffuse lighting images
 TEMP_IMAGE_DIR="data/intermediate/DTU/${SCAN_NAME}/images"
@@ -91,8 +102,8 @@ if [ -f "$DB_PATH" ]; then
     rm -f "$DB_PATH"
 fi
 
-echo "Creating symlinks to diffuse lighting images..."
-for img in ${IMAGE_DIR}/*_3_r5000.png; do
+echo "Creating symlinks to images..."
+for img in ${IMAGE_DIR}/${IMAGE_PATTERN}; do
     ln -s "$(realpath $img)" "$TEMP_IMAGE_DIR/$(basename $img)"
 done
 

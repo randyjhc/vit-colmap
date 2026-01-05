@@ -102,6 +102,17 @@ def parse_args():
         help="Maximum number of score labels to display per image (default: 100, shows top-scoring keypoints)",
     )
     parser.add_argument(
+        "--show-orientation",
+        action="store_true",
+        help="Show keypoint orientations as arrows",
+    )
+    parser.add_argument(
+        "--orientation-scale",
+        type=float,
+        default=10.0,
+        help="Scale factor for orientation arrow length (default: 10.0)",
+    )
+    parser.add_argument(
         "--inlier-color",
         type=str,
         default="green",
@@ -141,6 +152,11 @@ def parse_args():
         "--list-images",
         action="store_true",
         help="List all images in the database and exit",
+    )
+    parser.add_argument(
+        "--list-matches",
+        action="store_true",
+        help="List all image pairs with matches and exit",
     )
 
     return parser.parse_args()
@@ -300,6 +316,8 @@ def visualize_matches(
     show_all_keypoints: bool = False,
     show_scores: bool = False,
     max_score_labels: int = 100,
+    show_orientation: bool = False,
+    orientation_scale: float = 10.0,
     inlier_color: str = "green",
     outlier_color: str = "red",
     keypoint_size: int = 3,
@@ -322,6 +340,8 @@ def visualize_matches(
         show_all_keypoints: Show all keypoints, not just matched ones
         show_scores: When True with show_all_keypoints, show score labels for top keypoints
         max_score_labels: Maximum number of score labels to display per image
+        show_orientation: Show keypoint orientations as arrows
+        orientation_scale: Scale factor for orientation arrow length
         inlier_color: Color for inlier matches
         outlier_color: Color for outlier matches
         keypoint_size: Size of keypoint markers
@@ -469,6 +489,69 @@ def visualize_matches(
         markersize=keypoint_size + 1,
     )
 
+    # Draw orientation arrows if requested
+    if show_orientation and kpts1.shape[1] >= 4 and kpts2.shape[1] >= 4:
+        # Extract orientations (4th column, index 3) in radians
+        # Keypoint format: (x, y, scale, orientation, score, unused)
+
+        def draw_orientation_arrows(
+            kpts, x_offset=0, color="yellow", alpha=0.6, subset_indices=None
+        ):
+            """Draw orientation arrows for keypoints."""
+            if subset_indices is None:
+                subset_indices = range(len(kpts))
+
+            for idx in subset_indices:
+                x, y = kpts[idx, 0], kpts[idx, 1]
+                orientation = kpts[idx, 3]  # Orientation in radians
+
+                # Optionally use scale for arrow length (if available)
+                if kpts.shape[1] >= 3:
+                    scale = kpts[idx, 2]
+                    arrow_length = scale * orientation_scale
+                else:
+                    arrow_length = orientation_scale
+
+                # Calculate arrow endpoint
+                dx = arrow_length * np.cos(orientation)
+                dy = arrow_length * np.sin(orientation)
+
+                # Draw arrow
+                ax.arrow(
+                    x + x_offset,
+                    y,  # Start point
+                    dx,
+                    dy,  # Direction vector
+                    head_width=2,
+                    head_length=3,
+                    fc=color,
+                    ec=color,
+                    alpha=alpha,
+                    linewidth=0.8,
+                    length_includes_head=True,
+                )
+
+        # Draw orientations for all keypoints if show_all_keypoints is True
+        if show_all_keypoints:
+            draw_orientation_arrows(kpts1, x_offset=0, color="cyan", alpha=0.3)
+            draw_orientation_arrows(kpts2, x_offset=w1, color="cyan", alpha=0.3)
+
+        # Always draw orientations for matched keypoints (more prominent)
+        draw_orientation_arrows(
+            kpts1,
+            x_offset=0,
+            color="yellow",
+            alpha=0.8,
+            subset_indices=matched_kpts1_idx,
+        )
+        draw_orientation_arrows(
+            kpts2,
+            x_offset=w1,
+            color="yellow",
+            alpha=0.8,
+            subset_indices=matched_kpts2_idx,
+        )
+
     # Create legend
     legend_elements = [
         mpatches.Patch(color=inlier_color, label=f"Inliers: {num_inliers}"),
@@ -529,6 +612,80 @@ def list_images_in_database(db: pycolmap.Database) -> None:
     print("-" * 80)
 
 
+def list_matches_in_database(db: pycolmap.Database) -> None:
+    """List all image pairs with matches in the database."""
+    images = db.read_all_images()
+
+    # Handle different pycolmap versions
+    if isinstance(images, dict):
+        images_list = list(images.values())
+    else:
+        images_list = images
+
+    if not images_list:
+        print("No images found in database")
+        return
+
+    print(f"\nFound {len(images_list)} images in database")
+    print("Checking all pairs for matches...\n")
+
+    pairs_with_matches = []
+
+    # Check all pairs
+    for i in range(len(images_list)):
+        for j in range(i + 1, len(images_list)):
+            img1 = images_list[i]
+            img2 = images_list[j]
+
+            # Read matches
+            raw_matches, inlier_matches = read_matches_and_inliers(
+                db, img1.image_id, img2.image_id
+            )
+
+            if len(raw_matches) > 0:
+                num_inliers = len(inlier_matches) if inlier_matches is not None else 0
+                pairs_with_matches.append(
+                    {
+                        "idx1": i,
+                        "idx2": j,
+                        "id1": img1.image_id,
+                        "id2": img2.image_id,
+                        "name1": img1.name,
+                        "name2": img2.name,
+                        "raw": len(raw_matches),
+                        "inliers": num_inliers,
+                    }
+                )
+
+    if not pairs_with_matches:
+        print("No pairs with matches found!")
+        return
+
+    # Sort by number of raw matches (descending)
+    pairs_with_matches.sort(key=lambda x: x["raw"], reverse=True)
+
+    print(f"Found {len(pairs_with_matches)} pairs with matches:")
+    print("-" * 100)
+    print(
+        f"{'Indices':<12} {'Image IDs':<15} {'Raw':<8} {'Inliers':<10} {'Image Pair':<50}"
+    )
+    print("-" * 100)
+
+    for pair in pairs_with_matches:
+        indices = f"{pair['idx1']},{pair['idx2']}"
+        ids = f"{pair['id1']},{pair['id2']}"
+        names = f"{pair['name1']} <-> {pair['name2']}"
+        print(
+            f"{indices:<12} {ids:<15} {pair['raw']:<8} {pair['inliers']:<10} {names:<50}"
+        )
+
+    print("-" * 100)
+    print("\nTo visualize a pair, use: --image1 <index1> --image2 <index2>")
+    print(
+        f"Example: --image1 {pairs_with_matches[0]['idx1']} --image2 {pairs_with_matches[0]['idx2']}"
+    )
+
+
 def main():
     """Main function."""
     args = parse_args()
@@ -555,6 +712,11 @@ def main():
         # List images if requested
         if args.list_images:
             list_images_in_database(db)
+            return
+
+        # List matches if requested
+        if args.list_matches:
+            list_matches_in_database(db)
             return
 
         # Validate required arguments for visualization
@@ -599,6 +761,30 @@ def main():
 
         print(f"  Image 1: {len(kpts1)} keypoints")
         print(f"  Image 2: {len(kpts2)} keypoints")
+
+        # Print orientation statistics if available
+        if kpts1.shape[1] >= 4 and kpts2.shape[1] >= 4:
+            orientations1 = kpts1[:, 3]
+            orientations2 = kpts2[:, 3]
+            print("\nOrientation statistics:")
+            print(
+                f"  Image 1: min={np.min(orientations1):.4f}, max={np.max(orientations1):.4f}, mean={np.mean(orientations1):.4f}, std={np.std(orientations1):.4f}"
+            )
+            print(
+                f"  Image 2: min={np.min(orientations2):.4f}, max={np.max(orientations2):.4f}, mean={np.mean(orientations2):.4f}, std={np.std(orientations2):.4f}"
+            )
+
+            # Check if all orientations are the same
+            if np.std(orientations1) < 1e-6 and np.std(orientations2) < 1e-6:
+                print(
+                    f"  ⚠️  WARNING: All orientations appear to be constant ({np.mean(orientations1):.4f})"
+                )
+                print(
+                    "  This suggests the model was not trained with orientation supervision."
+                )
+                print(
+                    "  Consider training with --lambda-rot > 0 and rotation augmentation."
+                )
 
         # Read matches
         print("\nReading matches...")
@@ -665,6 +851,8 @@ def main():
             show_all_keypoints=args.show_all_keypoints,
             show_scores=args.show_scores,
             max_score_labels=args.max_score_labels,
+            show_orientation=args.show_orientation,
+            orientation_scale=args.orientation_scale,
             inlier_color=args.inlier_color,
             outlier_color=args.outlier_color,
             keypoint_size=args.keypoint_size,

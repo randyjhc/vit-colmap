@@ -327,7 +327,10 @@ class Pipeline:
         elif self.config.extractor.extractor_type == "trainable_vit":
             logger.info("Using Trainable ViT extractor")
             extractor = TrainableViTExtractor(
-                weights_path=self.config.extractor.vit_weights_path
+                weights_path=self.config.extractor.vit_weights_path,
+                num_keypoints=20480,
+                nms_radius=1,
+                score_threshold=0.4,
             )
         else:
             logger.info("Using ViT extractor")

@@ -14,6 +14,9 @@ A comprehensive metrics extraction and export system has been added to enable ev
 
 # ViT
 ./scripts/run_DTU_vit.sh scan1
+
+# Trainable ViT
+./scripts/run_DTU_trainable_vit.sh scan1
 ```
 
 ### 2. Compare Results
@@ -27,6 +30,9 @@ python scripts/compare_metrics.py scan2
 
 # Compare with custom dataset
 python scripts/compare_metrics.py --dataset DTU scan3
+
+# Compare 3 methods (SIFT, ViT, and a third method)
+python scripts/compare_metrics.py scan1 --third-json trainable_vit.json --third-label "ViT-v1"
 
 # Or aggregate all results
 python scripts/aggregate_results.py --dataset DTU
@@ -74,7 +80,7 @@ data/results/
     ├── scan1/
     │   ├── sift.json             # Detailed SIFT metrics
     │   ├── trainable_vit.json    # Detailed Trainable ViT metrics
-    │   ├── vit.json              # Detailed standard ViT metrics (if run)
+    │   ├── vit.json              # Detailed standard ViT metrics
     │   └── comparison_plot.png   # Visual comparison plot
     ├── summary.csv               # All results
     └── comparison_report.md      # Analysis
@@ -128,6 +134,16 @@ plotter = MetricsPlotter(
     vit_filename="trainable_vit.json"
 )
 plotter.plot_single_scan("scan1", output_path=Path("comparison.png"))
+
+# Compare three methods
+plotter = MetricsPlotter(
+    Path("data/results/DTU"),
+    sift_filename="sift.json",
+    vit_filename="vit.json",
+    third_filename="trainable_vit.json",
+    third_label="ViT-v1"
+)
+plotter.plot_single_scan("scan1", output_path=Path("comparison_3methods.png"))
 ```
 
 ## Integration with Existing Pipeline

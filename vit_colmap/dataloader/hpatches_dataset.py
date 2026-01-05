@@ -9,6 +9,11 @@ from pathlib import Path
 from torch.utils.data import Dataset
 import torchvision.transforms as transforms
 from typing import Optional, Tuple, List
+from .synthetic_homography import (
+    SyntheticHomographyConfig,
+    create_synthetic_pair,
+    compose_homographies,
+)
 
 
 class HPatchesDataset(Dataset):
@@ -41,6 +46,10 @@ class HPatchesDataset(Dataset):
         patch_size: int = 14,
         transform: Optional[transforms.Compose] = None,
         max_pairs_per_sequence: int = 5,
+        pair_mode: str = "reference_only",
+        use_synthetic_aug: bool = False,
+        synthetic_ratio: float = 0.5,
+        synthetic_config: Optional[SyntheticHomographyConfig] = None,
     ):
         """
         Initialize HPatches dataset.
@@ -52,6 +61,10 @@ class HPatchesDataset(Dataset):
             patch_size: ViT patch size (default 14 for DINOv2)
             transform: Optional additional transforms
             max_pairs_per_sequence: Maximum number of image pairs per sequence (2-6)
+            pair_mode: Pairing strategy - "reference_only" (img1 with all), "consecutive" (add consecutive pairs), "all_pairs" (all combinations)
+            use_synthetic_aug: Enable synthetic homography augmentation
+            synthetic_ratio: Ratio of synthetic samples (0.0 = none, 0.5 = 50% synthetic)
+            synthetic_config: Configuration for synthetic augmentation (default: moderate)
         """
         self.root_dir = Path(root_dir)
         self.split = split
@@ -59,6 +72,21 @@ class HPatchesDataset(Dataset):
         self.max_pairs_per_sequence = min(
             max_pairs_per_sequence, 5
         )  # HPatches has images 1-6
+
+        # Pairing and augmentation settings
+        self.pair_mode = pair_mode
+        assert pair_mode in [
+            "reference_only",
+            "consecutive",
+            "all_pairs",
+        ], f"Invalid pair_mode: {pair_mode}"
+
+        self.use_synthetic_aug = use_synthetic_aug
+        self.synthetic_ratio = synthetic_ratio
+        self.synthetic_config = synthetic_config or SyntheticHomographyConfig.moderate()
+
+        # Random state for synthetic augmentation
+        self.rng = np.random.RandomState()
 
         # Adjust target size to be divisible by patch_size
         self.target_h = (target_size[0] // patch_size) * patch_size
@@ -83,11 +111,23 @@ class HPatchesDataset(Dataset):
         # Build list of all image pairs
         self.pairs = self._build_pair_list()
 
+        # Compute number of real vs synthetic samples
+        self.num_real_pairs = len(self.pairs)
+        if self.use_synthetic_aug:
+            self.num_synthetic_pairs = int(self.num_real_pairs * self.synthetic_ratio)
+        else:
+            self.num_synthetic_pairs = 0
+
         print("HPatchesDataset initialized:")
         print(f"  Root: {self.root_dir}")
         print(f"  Split: {self.split}")
         print(f"  Sequences: {len(self.sequences)}")
-        print(f"  Image pairs: {len(self.pairs)}")
+        print(f"  Pair mode: {self.pair_mode}")
+        print(f"  Real pairs: {self.num_real_pairs}")
+        if self.use_synthetic_aug:
+            print(f"  Synthetic pairs: {self.num_synthetic_pairs}")
+            print(f"  Synthetic config: {self.synthetic_config.to_dict()}")
+        print(f"  Total pairs: {len(self)}")
         print(f"  Target size: {self.target_h}x{self.target_w}")
 
     def _discover_sequences(self) -> List[Path]:
@@ -132,17 +172,73 @@ class HPatchesDataset(Dataset):
                 return img_path
         return None
 
-    def _build_pair_list(self) -> List[Tuple[Path, int]]:
-        """Build list of (sequence_path, target_img_num) pairs."""
+    def _build_pair_list(self) -> List[Tuple[Path, int, int]]:
+        """
+        Build list of (sequence_path, img_num_1, img_num_2) tuples.
+
+        Returns:
+            pairs: List of (seq_dir, img1_idx, img2_idx) tuples
+        """
         pairs = []
         for seq_dir in self.sequences:
-            # For each sequence, pair image 1 with images 2-6
-            for img_num in range(2, 2 + self.max_pairs_per_sequence):
-                img_path = self._find_image(seq_dir, str(img_num))
-                h_path = seq_dir / f"H_1_{img_num}"
+            max_img_num = 1 + self.max_pairs_per_sequence
 
-                if img_path is not None and h_path.exists():
-                    pairs.append((seq_dir, img_num))
+            if self.pair_mode == "reference_only":
+                # Only pair image 1 with images 2-6
+                for img_num in range(2, max_img_num + 1):
+                    img_path = self._find_image(seq_dir, str(img_num))
+                    h_path = seq_dir / f"H_1_{img_num}"
+
+                    if img_path is not None and h_path.exists():
+                        pairs.append((seq_dir, 1, img_num))
+
+            elif self.pair_mode == "consecutive":
+                # Reference pairs (1 with all) + consecutive pairs (2-3, 3-4, etc.)
+                # Reference pairs
+                for img_num in range(2, max_img_num + 1):
+                    img_path = self._find_image(seq_dir, str(img_num))
+                    h_path = seq_dir / f"H_1_{img_num}"
+                    if img_path is not None and h_path.exists():
+                        pairs.append((seq_dir, 1, img_num))
+
+                # Consecutive pairs
+                for img_num in range(2, max_img_num):
+                    img1_path = self._find_image(seq_dir, str(img_num))
+                    img2_path = self._find_image(seq_dir, str(img_num + 1))
+                    h1_path = seq_dir / f"H_1_{img_num}"
+                    h2_path = seq_dir / f"H_1_{img_num + 1}"
+
+                    if (
+                        img1_path is not None
+                        and img2_path is not None
+                        and h1_path.exists()
+                        and h2_path.exists()
+                    ):
+                        pairs.append((seq_dir, img_num, img_num + 1))
+
+            elif self.pair_mode == "all_pairs":
+                # All possible pairs (combinatorial)
+                for i in range(1, max_img_num + 1):
+                    for j in range(i + 1, max_img_num + 1):
+                        img1_path = self._find_image(seq_dir, str(i))
+                        img2_path = self._find_image(seq_dir, str(j))
+
+                        # Check if we can compute homography
+                        if i == 1:
+                            h_path = seq_dir / f"H_1_{j}"
+                            can_compute = h_path.exists()
+                        else:
+                            # Need H_1_i and H_1_j to compute H_i_j
+                            h1_path = seq_dir / f"H_1_{i}"
+                            h2_path = seq_dir / f"H_1_{j}"
+                            can_compute = h1_path.exists() and h2_path.exists()
+
+                        if (
+                            img1_path is not None
+                            and img2_path is not None
+                            and can_compute
+                        ):
+                            pairs.append((seq_dir, i, j))
 
         return pairs
 
@@ -207,7 +303,46 @@ class HPatchesDataset(Dataset):
         return img.shape[:2]  # (H, W)
 
     def __len__(self) -> int:
-        return len(self.pairs)
+        """Return total dataset size (real + synthetic pairs)."""
+        return self.num_real_pairs + self.num_synthetic_pairs
+
+    def _load_homography_for_pair(
+        self,
+        seq_dir: Path,
+        img1_idx: int,
+        img2_idx: int,
+        orig_size: Tuple[int, int],
+    ) -> np.ndarray:
+        """
+        Load or compute homography for a pair of images.
+
+        Args:
+            seq_dir: Sequence directory
+            img1_idx: First image index
+            img2_idx: Second image index
+            orig_size: Original image size (H, W)
+
+        Returns:
+            H: (3, 3) homography matrix mapping img1 -> img2
+        """
+        if img1_idx == 1:
+            # Direct homography available
+            h_path = seq_dir / f"H_1_{img2_idx}"
+            H = self._load_homography(h_path, orig_size)
+        else:
+            # Compose homographies: H_i_j = H_1_j @ inv(H_1_i)
+            h1_path = seq_dir / f"H_1_{img1_idx}"
+            h2_path = seq_dir / f"H_1_{img2_idx}"
+
+            # Load both homographies (already adjusted for resize)
+            H_1_i = self._load_homography(h1_path, orig_size)
+            H_1_j = self._load_homography(h2_path, orig_size)
+
+            # Compose: H_i_j = H_1_j @ inv(H_1_i)
+            H_1_i_inv = np.linalg.inv(H_1_i)
+            H = compose_homographies(H_1_i_inv, H_1_j)
+
+        return H
 
     def __getitem__(self, idx: int) -> dict:
         """
@@ -219,27 +354,66 @@ class HPatchesDataset(Dataset):
                 - img2: Target image tensor (3, H, W)
                 - H: Homography matrix (3, 3)
                 - seq_name: Sequence name
-                - pair_idx: Target image index (2-6)
+                - pair_idx: Tuple (img1_idx, img2_idx)
+                - is_synthetic: Boolean flag
         """
-        seq_dir, target_idx = self.pairs[idx]
+        # Determine if this is a real or synthetic sample
+        is_synthetic = idx >= self.num_real_pairs
 
-        # Load images
-        ref_path = self._find_image(seq_dir, "1")
-        target_path = self._find_image(seq_dir, str(target_idx))
+        if is_synthetic:
+            # Generate synthetic pair
+            # Sample a random real pair to use as base
+            base_idx = self.rng.randint(0, self.num_real_pairs)
+            seq_dir, img1_idx, img2_idx = self.pairs[base_idx]
 
-        if ref_path is None or target_path is None:
-            raise ValueError(f"Image files not found for {seq_dir}")
+            # Load one image from the sequence
+            img_path = self._find_image(seq_dir, str(img1_idx))
+            if img_path is None:
+                raise ValueError(f"Image file not found: {seq_dir}/{img1_idx}")
 
-        # Get original size for homography adjustment
-        orig_size = self._get_original_size(seq_dir)
+            # Load image (not yet resized to target)
+            img_orig = cv2.imread(str(img_path))
+            if img_orig is None:
+                raise ValueError(f"Failed to load image: {img_path}")
+            img_orig = cv2.cvtColor(img_orig, cv2.COLOR_BGR2RGB)
 
-        # Load and process images
-        img1 = self._load_image(ref_path)
-        img2 = self._load_image(target_path)
+            # Create synthetic pair with random homography
+            img1, img2, H = create_synthetic_pair(
+                img_orig,
+                image_size=(self.target_h, self.target_w),
+                rotation_range=self.synthetic_config.rotation_range,
+                scale_range=self.synthetic_config.scale_range,
+                perspective_range=self.synthetic_config.perspective_range,
+                translation_range=self.synthetic_config.translation_range,
+                random_state=self.rng,
+            )
 
-        # Load and adjust homography
-        h_path = seq_dir / f"H_1_{target_idx}"
-        H = self._load_homography(h_path, orig_size)
+            seq_name = f"{seq_dir.name}_synthetic"
+            pair_indices = (img1_idx, -1)  # -1 indicates synthetic
+
+        else:
+            # Load real pair
+            seq_dir, img1_idx, img2_idx = self.pairs[idx]
+
+            # Load images
+            img1_path = self._find_image(seq_dir, str(img1_idx))
+            img2_path = self._find_image(seq_dir, str(img2_idx))
+
+            if img1_path is None or img2_path is None:
+                raise ValueError(f"Image files not found for {seq_dir}")
+
+            # Get original size for homography adjustment
+            orig_size = self._get_original_size(seq_dir)
+
+            # Load and process images
+            img1 = self._load_image(img1_path)
+            img2 = self._load_image(img2_path)
+
+            # Load or compute homography
+            H = self._load_homography_for_pair(seq_dir, img1_idx, img2_idx, orig_size)
+
+            seq_name = seq_dir.name
+            pair_indices = (img1_idx, img2_idx)
 
         # Apply transforms
         img1_tensor = self.transform(img1)
@@ -250,8 +424,9 @@ class HPatchesDataset(Dataset):
             "img1": img1_tensor,
             "img2": img2_tensor,
             "H": H_tensor,
-            "seq_name": seq_dir.name,
-            "pair_idx": target_idx,
+            "seq_name": seq_name,
+            "pair_idx": pair_indices,
+            "is_synthetic": is_synthetic,
         }
 
     def get_sequence_info(self) -> dict:

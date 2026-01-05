@@ -18,20 +18,40 @@ class TrainingSampler:
         num_in_image_negatives: int = 10,
         num_hard_negatives: int = 5,
         patch_size: int = 14,
+        selection_mode: str = "top_k",
+        similarity_threshold: float = 0.7,
+        min_invariant_points: int = 100,
+        max_invariant_points: int = 2048,
     ):
         """
         Args:
-            top_k_invariant: Number of invariant points to select
+            top_k_invariant: Number of invariant points to select (for top_k mode)
             negative_radius: Minimum pixel distance for in-image negatives
             num_in_image_negatives: Number of in-image negatives per point
             num_hard_negatives: Number of hard negatives per point
             patch_size: ViT patch size (for coordinate scaling)
+            selection_mode: Point selection strategy - "top_k", "threshold", or "hybrid"
+            similarity_threshold: Minimum similarity for threshold-based selection
+            min_invariant_points: Minimum number of points to select (for threshold mode)
+            max_invariant_points: Maximum number of points to prevent OOM
         """
         self.top_k_invariant = top_k_invariant
         self.negative_radius = negative_radius
         self.num_in_image_negatives = num_in_image_negatives
         self.num_hard_negatives = num_hard_negatives
         self.patch_size = patch_size
+
+        # Threshold-based selection parameters
+        self.selection_mode = selection_mode
+        assert selection_mode in [
+            "top_k",
+            "threshold",
+            "hybrid",
+        ], f"Invalid selection_mode: {selection_mode}"
+
+        self.similarity_threshold = similarity_threshold
+        self.min_invariant_points = min_invariant_points
+        self.max_invariant_points = max_invariant_points
 
     def select_invariant_points(
         self,
@@ -41,7 +61,12 @@ class TrainingSampler:
         image_size: Tuple[int, int],
     ) -> torch.Tensor:
         """
-        Select top-k invariant points based on cosine similarity after warping.
+        Select invariant points based on cosine similarity after warping.
+
+        Selection modes:
+        - "top_k": Select top K points with highest similarity
+        - "threshold": Select all points with similarity > threshold
+        - "hybrid": Select points above threshold, then take top K from those
 
         Args:
             features1: (B, C, H_p, W_p) features from image 1
@@ -69,11 +94,77 @@ class TrainingSampler:
         # Cosine similarity per location
         similarity = (warped_norm * features2_norm).sum(dim=1)  # (B, H_p, W_p)
 
-        # Flatten and select top-k
+        # Flatten similarity map
         similarity_flat = similarity.view(B, -1)  # (B, H_p * W_p)
-        k = min(self.top_k_invariant, similarity_flat.shape[1])
 
-        _, top_k_indices = similarity_flat.topk(k, dim=1)  # (B, K)
+        if self.selection_mode == "top_k":
+            # Select top-k points by similarity
+            k = min(self.top_k_invariant, similarity_flat.shape[1])
+            _, top_k_indices = similarity_flat.topk(k, dim=1)  # (B, K)
+
+        elif self.selection_mode == "threshold":
+            # Select all points above threshold (clamped to min/max range)
+            invariant_coords_list = []
+            for b in range(B):
+                # Find points above threshold
+                above_threshold = similarity_flat[b] >= self.similarity_threshold
+                indices = torch.nonzero(above_threshold, as_tuple=True)[0]
+
+                # Clamp to min/max range
+                num_points = len(indices)
+                if num_points < self.min_invariant_points:
+                    # Not enough points above threshold, take top min_points
+                    k = min(self.min_invariant_points, similarity_flat.shape[1])
+                    _, indices = similarity_flat[b].topk(k)
+                elif num_points > self.max_invariant_points:
+                    # Too many points, select top max_points from those above threshold
+                    scores = similarity_flat[b, indices]
+                    _, top_indices = scores.topk(self.max_invariant_points)
+                    indices = indices[top_indices]
+
+                invariant_coords_list.append(indices)
+
+            # Pad to same length for batching
+            max_len = max(len(coords) for coords in invariant_coords_list)
+            top_k_indices = torch.zeros(
+                B, max_len, dtype=torch.long, device=features1.device
+            )
+            for b, coords in enumerate(invariant_coords_list):
+                top_k_indices[b, : len(coords)] = coords
+                # Pad with first index if needed
+                if len(coords) < max_len:
+                    top_k_indices[b, len(coords) :] = coords[0]
+
+        elif self.selection_mode == "hybrid":
+            # First filter by threshold, then select top-k from those
+            invariant_coords_list = []
+            for b in range(B):
+                # Find points above threshold
+                above_threshold = similarity_flat[b] >= self.similarity_threshold
+                indices = torch.nonzero(above_threshold, as_tuple=True)[0]
+
+                if len(indices) == 0:
+                    # No points above threshold, fall back to top-k
+                    k = min(self.top_k_invariant, similarity_flat.shape[1])
+                    _, indices = similarity_flat[b].topk(k)
+                elif len(indices) > self.top_k_invariant:
+                    # Select top-k from those above threshold
+                    scores = similarity_flat[b, indices]
+                    _, top_indices = scores.topk(self.top_k_invariant)
+                    indices = indices[top_indices]
+
+                invariant_coords_list.append(indices)
+
+            # Pad to same length for batching
+            max_len = max(len(coords) for coords in invariant_coords_list)
+            top_k_indices = torch.zeros(
+                B, max_len, dtype=torch.long, device=features1.device
+            )
+            for b, coords in enumerate(invariant_coords_list):
+                top_k_indices[b, : len(coords)] = coords
+                # Pad with first index if needed
+                if len(coords) < max_len:
+                    top_k_indices[b, len(coords) :] = coords[0]
 
         # Convert flat indices to 2D coordinates
         # indices = y * W_p + x

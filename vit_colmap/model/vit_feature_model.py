@@ -223,7 +223,7 @@ class ViTFeatureModel(nn.Module):
         keypoints[:, 3] = torch.tanh(keypoints[:, 3]) * torch.pi
 
         # Normalize descriptors to unit length
-        descriptors = F.normalize(descriptors, p=2, dim=1)
+        descriptors = F.normalize(descriptors, p=2, dim=1, eps=1e-8)
 
         return {
             "keypoints": keypoints,  # (B, 4, H/4, W/4)
@@ -289,7 +289,7 @@ class ViTFeatureModel(nn.Module):
         keypoints[:, 3] = torch.tanh(keypoints[:, 3]) * torch.pi
 
         # Normalize descriptors to unit length
-        descriptors = F.normalize(descriptors, p=2, dim=1)
+        descriptors = F.normalize(descriptors, p=2, dim=1, eps=1e-8)
 
         return {
             "keypoints": keypoints,  # (B, 4, H/4, W/4)
